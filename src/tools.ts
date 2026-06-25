@@ -98,7 +98,7 @@ export function registerBridgeTools(
         openWorldHint: false
       }
     },
-    async (args) => {
+    async (args, extra) => {
       const cwd = resolveAllowedCwd(args.cwd, config);
       assertRootSafeForDelegation(config.allowedRoot);
       return runCodexReadWithFastReturn({
@@ -107,7 +107,8 @@ export function registerBridgeTools(
         jobs,
         prompt: args.prompt,
         cwd,
-        timeoutMs: args.timeoutMs || config.upstreamTimeoutMs
+        timeoutMs: args.timeoutMs || config.upstreamTimeoutMs,
+        signal: extra.signal
       });
     }
   );
@@ -174,13 +175,14 @@ async function runCodexReadWithFastReturn(input: {
   prompt: string;
   cwd: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<ToolResult> {
   const payload = buildCodexReadPayload({
     config: input.config,
     prompt: input.prompt,
     cwd: input.cwd
   });
-  const job = input.jobs.start(() => input.upstream.callTool("codex", payload, input.timeoutMs));
+  const job = input.jobs.start(() => input.upstream.callTool("codex", payload, input.timeoutMs, input.signal));
   const state = await Promise.race([
     job.promise.then(() => "settled" as const),
     delay(input.config.fastReturnMs).then(() => "running" as const)

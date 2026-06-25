@@ -1,8 +1,10 @@
+import { EventEmitter } from "node:events";
+import { request as httpRequest } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loadConfig } from "../src/config.js";
-import { createHttpServer } from "../src/server.js";
+import { createHttpServer, onResponseComplete } from "../src/server.js";
 import type { CodexUpstream } from "../src/upstream.js";
 import { DeferredUpstream, FakeUpstream, parseToolJson, tempRoot } from "./helpers.js";
 
@@ -94,6 +96,121 @@ describe("http server", () => {
     expect(response.status).toBe(501);
     expect(await response.json()).toMatchObject({ error: "oauth_not_implemented" });
   });
+
+  it("releases HTTP concurrency and codex_read job slots when MCP clients abort mid-request", async () => {
+    const upstream = new DeferredUpstream();
+    const baseUrl = await start(
+      {
+        CODEX_BRIDGE_NO_AUTH: "1",
+        CODEX_BRIDGE_LOCAL_SMOKE_TEST: "1",
+        CODEX_BRIDGE_FAST_RETURN_MS: "5000",
+        CODEX_BRIDGE_HTTP_CONCURRENCY_MAX: "1"
+      },
+      upstream
+    );
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "codex_read",
+        arguments: {
+          prompt: "slow"
+        }
+      }
+    });
+    const url = new URL(`${baseUrl}/mcp`);
+    const request = httpRequest({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body)
+      }
+    });
+    request.on("error", () => {});
+    request.write(body);
+    request.end();
+
+    await waitForCondition(() => upstream.calls.length === 1);
+    const closed = new Promise<void>((resolve) => {
+      request.once("close", resolve);
+    });
+    request.destroy();
+    await closed;
+    await waitForCondition(() => upstream.abortedCalls === 1 && upstream.pendingCount === 0);
+
+    const invalidResponse = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json"
+      },
+      body: "{}"
+    });
+    expect(invalidResponse.status).not.toBe(429);
+    expect(invalidResponse.status).toBe(400);
+
+    const nextRead = fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "codex_read",
+          arguments: {
+            prompt: "next"
+          }
+        }
+      })
+    });
+    await waitForCondition(() => upstream.calls.length === 2);
+    upstream.resolveNext();
+    const nextResponse = await nextRead;
+    const nextBody = await nextResponse.text();
+
+    expect(nextResponse.status).toBe(200);
+    expect(nextBody).not.toContain("too_many_concurrent_requests");
+    expect(nextBody).not.toContain("Another codex_read job is already running");
+    expect(nextBody).toContain("completed");
+  });
+
+  it("runs response cleanup once when clients close before finish", () => {
+    const response = new EventEmitter();
+    let cleanupCount = 0;
+
+    onResponseComplete(response, () => {
+      cleanupCount += 1;
+    });
+
+    response.emit("close");
+    response.emit("finish");
+    response.emit("close");
+
+    expect(cleanupCount).toBe(1);
+  });
+
+  it("runs response cleanup once when normal finish is followed by close", () => {
+    const response = new EventEmitter();
+    let cleanupCount = 0;
+
+    onResponseComplete(response, () => {
+      cleanupCount += 1;
+    });
+
+    response.emit("finish");
+    response.emit("close");
+
+    expect(cleanupCount).toBe(1);
+  });
 });
 
 async function start(env: NodeJS.ProcessEnv, upstream: CodexUpstream = new FakeUpstream()): Promise<string> {
@@ -131,4 +248,14 @@ async function waitForJobStatus(client: Client, jobId: string, expected: string)
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`Timed out waiting for ${expected}`);
+}
+
+async function waitForCondition(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for condition.");
 }

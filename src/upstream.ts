@@ -9,7 +9,12 @@ export type ToolResult = CallToolResult;
 
 export type CodexUpstream = {
   listTools(): Promise<unknown>;
-  callTool(name: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolResult>;
+  callTool(
+    name: string,
+    args: Record<string, unknown>,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<ToolResult>;
   close(): Promise<void>;
 };
 
@@ -33,7 +38,12 @@ export class CodexStdioUpstream implements CodexUpstream {
     return client.listTools();
   }
 
-  async callTool(name: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolResult> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<ToolResult> {
     if (name !== "codex") {
       throw new Error(`Bridge policy forbids calling upstream tool: ${name}`);
     }
@@ -46,7 +56,9 @@ export class CodexStdioUpstream implements CodexUpstream {
       undefined,
       {
         timeout: timeoutMs,
-        resetTimeoutOnProgress: true
+        maxTotalTimeout: timeoutMs,
+        resetTimeoutOnProgress: true,
+        signal
       }
     ) as Promise<ToolResult>;
   }

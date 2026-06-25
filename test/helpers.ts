@@ -12,7 +12,15 @@ export class FakeUpstream implements CodexUpstream {
     };
   }
 
-  async callTool(name: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolResult> {
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<ToolResult> {
+    if (signal?.aborted) {
+      throw new Error("Upstream call aborted.");
+    }
     this.calls.push({ name, args, timeoutMs });
     return {
       content: [
@@ -28,12 +36,45 @@ export class FakeUpstream implements CodexUpstream {
 }
 
 export class DeferredUpstream extends FakeUpstream {
-  private pending: Array<{ resolve: (result: ToolResult) => void; reject: (error: Error) => void }> = [];
+  private pending: Array<{
+    resolve: (result: ToolResult) => void;
+    reject: (error: Error) => void;
+    cleanup: () => void;
+  }> = [];
+  public abortedCalls = 0;
 
-  override async callTool(name: string, args: Record<string, unknown>, timeoutMs: number): Promise<ToolResult> {
+  get pendingCount(): number {
+    return this.pending.length;
+  }
+
+  override async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<ToolResult> {
     this.calls.push({ name, args, timeoutMs });
     return new Promise<ToolResult>((resolve, reject) => {
-      this.pending.push({ resolve, reject });
+      if (signal?.aborted) {
+        this.abortedCalls += 1;
+        reject(new Error("Upstream call aborted."));
+        return;
+      }
+      const pending = {
+        resolve,
+        reject,
+        cleanup: () => {
+          signal?.removeEventListener("abort", onAbort);
+        }
+      };
+      const onAbort = () => {
+        this.abortedCalls += 1;
+        this.pending = this.pending.filter((item) => item !== pending);
+        pending.cleanup();
+        reject(new Error("Upstream call aborted."));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pending.push(pending);
     });
   }
 
@@ -42,6 +83,7 @@ export class DeferredUpstream extends FakeUpstream {
     if (!pending) {
       throw new Error("No pending upstream call.");
     }
+    pending.cleanup();
     pending.resolve(result);
   }
 
@@ -50,6 +92,7 @@ export class DeferredUpstream extends FakeUpstream {
     if (!pending) {
       throw new Error("No pending upstream call.");
     }
+    pending.cleanup();
     pending.reject(error);
   }
 }

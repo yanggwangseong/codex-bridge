@@ -72,7 +72,7 @@ export function createHttpServer(config: BridgeConfig, upstream: CodexUpstream):
       return;
     }
     activeHttpRequests += 1;
-    res.on("finish", () => {
+    onResponseComplete(res, () => {
       activeHttpRequests -= 1;
     });
     next();
@@ -147,6 +147,23 @@ function isAuthorized(header: string | undefined, config: BridgeConfig): boolean
     return true;
   }
   return Boolean(config.token) && header === `Bearer ${config.token}`;
+}
+
+type ResponseCompletionEmitter = {
+  on(event: "finish" | "close", listener: () => void): unknown;
+};
+
+export function onResponseComplete(res: ResponseCompletionEmitter, cleanup: () => void): void {
+  let completed = false;
+  const complete = () => {
+    if (completed) {
+      return;
+    }
+    completed = true;
+    cleanup();
+  };
+  res.on("finish", complete);
+  res.on("close", complete);
 }
 
 function createRateLimiter(windowMs: number, max: number): (key: string) => { allowed: boolean } {
