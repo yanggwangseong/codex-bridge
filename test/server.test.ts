@@ -250,12 +250,13 @@ async function waitForJobStatus(client: Client, jobId: string, expected: string)
   throw new Error(`Timed out waiting for ${expected}`);
 }
 
-async function waitForCondition(condition: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+async function waitForCondition(condition: () => boolean, label = "condition", timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     if (condition()) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error("Timed out waiting for condition.");
+  throw new Error(`Timed out waiting for ${label}.`);
 }

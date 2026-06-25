@@ -48,19 +48,24 @@ export class CodexStdioUpstream implements CodexUpstream {
       throw new Error(`Bridge policy forbids calling upstream tool: ${name}`);
     }
     const client = await this.getClient();
-    return client.callTool(
-      {
-        name,
-        arguments: args
-      },
-      undefined,
-      {
-        timeout: timeoutMs,
-        maxTotalTimeout: timeoutMs,
-        resetTimeoutOnProgress: true,
-        signal
-      }
-    ) as Promise<ToolResult>;
+    const deadline = createDeadlineSignal(signal, timeoutMs);
+    try {
+      return (await client.callTool(
+        {
+          name,
+          arguments: args
+        },
+        undefined,
+        {
+          timeout: timeoutMs,
+          maxTotalTimeout: timeoutMs,
+          resetTimeoutOnProgress: true,
+          signal: deadline.signal
+        }
+      )) as ToolResult;
+    } finally {
+      deadline.cleanup();
+    }
   }
 
   async close(): Promise<void> {
@@ -139,6 +144,39 @@ export function buildChildEnv(env: NodeJS.ProcessEnv): Record<string, string> {
     delete child[key];
   }
   return child;
+}
+
+function createDeadlineSignal(parentSignal: AbortSignal | undefined, timeoutMs: number): {
+  signal: AbortSignal;
+  cleanup: () => void;
+} {
+  const controller = new AbortController();
+  const abort = (reason: unknown) => {
+    if (!controller.signal.aborted) {
+      controller.abort(reason);
+    }
+  };
+  const timeout = setTimeout(() => {
+    abort(new Error(`Codex upstream call exceeded ${timeoutMs}ms total timeout.`));
+  }, timeoutMs);
+  timeout.unref?.();
+
+  const onParentAbort = () => {
+    abort(parentSignal?.reason ?? new Error("MCP request aborted."));
+  };
+  if (parentSignal?.aborted) {
+    onParentAbort();
+  } else {
+    parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", onParentAbort);
+    }
+  };
 }
 
 export function extractToolNames(tools: unknown): string[] {
