@@ -1,0 +1,37 @@
+{
+  "name": "codex-bridge",
+  "version": "0.1.0",
+  "description": "Personal read-only ChatGPT Developer Mode to local Codex MCP bridge.",
+  "type": "module",
+  "bin": {
+    "codex-bridge": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "check": "npm run build && npm test"
+  },
+  "keywords": [
+    "codex",
+    "chatgpt",
+    "mcp",
+    "read-only"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.12.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.15"
+  }
+}

@@ -1,0 +1,10 @@
+This project was built with DeepCogNeural/codex-gpt-bridge as a reference:
+
+  https://github.com/DeepCogNeural/codex-gpt-bridge
+
+The reference project is MIT licensed:
+
+  Copyright (c) 2026 Linghao Xu
+
+This reduced bridge intentionally removes the upstream write tools and reverse
+OpenAI API path. See README.md for the security model and removed scope.
