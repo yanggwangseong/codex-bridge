@@ -1,5 +1,6 @@
-import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
+import { containsSecretPattern } from "./secretPatterns.js";
 
 export type TunnelMode = "none" | "openai-secure";
 
@@ -44,6 +45,7 @@ export const OPENAI_API_ENV_NAMES = [
 ] as const;
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const GIT_METADATA_MAX_BYTES = 256 * 1024;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): BridgeConfig {
   const host = optional(env.CODEX_BRIDGE_HOST) || "127.0.0.1";
@@ -133,8 +135,98 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
   ]);
 
   function addFinding(list: string[], value: string): void {
-    if (list.length < maxFindings) {
+    if (list.length < maxFindings && !list.includes(value)) {
       list.push(value);
+    }
+  }
+
+  function inspectGitMetadataFile(fullPath: string): void {
+    let stat;
+    try {
+      stat = lstatSync(fullPath);
+    } catch {
+      return;
+    }
+
+    if (stat.isSymbolicLink()) {
+      try {
+        const target = realpathSync(fullPath);
+        if (!isInsideRoot(target, root)) {
+          addFinding(symlinkEscapes, fullPath);
+          return;
+        }
+        inspectGitMetadataContent(target, fullPath);
+      } catch {
+        addFinding(symlinkEscapes, fullPath);
+      }
+      return;
+    }
+
+    inspectGitMetadataContent(fullPath, fullPath, stat);
+  }
+
+  function inspectGitMetadataContent(readPath: string, findingPath: string, stat = statSync(readPath)): void {
+    if (!stat.isFile()) {
+      return;
+    }
+    if (stat.size > GIT_METADATA_MAX_BYTES) {
+      addFinding(sensitiveFiles, findingPath);
+      return;
+    }
+
+    try {
+      if (containsSecretPattern(readFileSync(readPath, "utf8"))) {
+        addFinding(sensitiveFiles, findingPath);
+      }
+    } catch {
+      return;
+    }
+  }
+
+  function scanGitMetadataDir(dir: string, depth: number): void {
+    if (depth > 8) {
+      return;
+    }
+
+    let stat;
+    try {
+      stat = lstatSync(dir);
+    } catch {
+      return;
+    }
+
+    if (stat.isSymbolicLink()) {
+      try {
+        const target = realpathSync(dir);
+        if (!isInsideRoot(target, root)) {
+          addFinding(symlinkEscapes, dir);
+        }
+      } catch {
+        addFinding(symlinkEscapes, dir);
+      }
+      return;
+    }
+    if (!stat.isDirectory()) {
+      return;
+    }
+
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    const skipGitInternalDirs = new Set(["branches", "hooks", "logs", "objects", "refs"]);
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isFile() && (entry.name === "config" || entry.name === "config.worktree")) {
+        inspectGitMetadataFile(fullPath);
+      } else if (entry.isDirectory() && !skipGitInternalDirs.has(entry.name)) {
+        scanGitMetadataDir(fullPath, depth + 1);
+      } else if (entry.isSymbolicLink()) {
+        inspectGitMetadataFile(fullPath);
+      }
     }
   }
 
@@ -182,6 +274,10 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
   }
 
   if (existsSync(root) && statSync(root).isDirectory()) {
+    inspectGitMetadataFile(path.join(root, ".gitmodules"));
+    inspectGitMetadataFile(path.join(root, ".git-credentials"));
+    inspectGitMetadataFile(path.join(root, ".gitconfig"));
+    scanGitMetadataDir(path.join(root, ".git"), 0);
     walk(root);
   }
 
@@ -215,6 +311,7 @@ export function isSensitiveBasename(name: string): boolean {
   const deniedBasenames = new Set([
     ".npmrc",
     ".pypirc",
+    ".git-credentials",
     ".netrc",
     "id_rsa",
     "id_ed25519",

@@ -1,4 +1,4 @@
-import { realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -97,6 +97,71 @@ describe("config policy", () => {
     expect(scan.sensitiveFiles).toContain(path.join(root, ".env"));
     expect(scan.symlinkEscapes).toContain(path.join(root, "outside-link"));
     expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
+  it("detects credential-bearing git metadata without blocking normal git config", () => {
+    const root = tempRoot();
+    const gitDir = path.join(root, ".git");
+    mkdirSync(gitDir);
+    writeFileSync(
+      path.join(gitDir, "config"),
+      '[remote "origin"]\nurl = https://github.com/example/repo.git\n[remote "mirror"]\nurl = https://git@github.com/example/repo.git\n'
+    );
+
+    expect(scanRootSafety(root).sensitiveFiles).toEqual([]);
+
+    writeFileSync(
+      path.join(gitDir, "config"),
+      '[remote "origin"]\nurl = https://user:ghp_exampleSECRET1234567890@github.com/example/repo.git\n'
+    );
+
+    const scan = scanRootSafety(root);
+    expect(scan.sensitiveFiles).toContain(path.join(gitDir, "config"));
+    expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
+  it("detects git authorization extraheaders", () => {
+    const root = tempRoot();
+    const gitDir = path.join(root, ".git");
+    mkdirSync(gitDir);
+    writeFileSync(path.join(gitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+
+    expect(scanRootSafety(root).sensitiveFiles).toContain(path.join(gitDir, "config"));
+  });
+
+  it("detects credential-bearing git metadata symlinks inside the root", () => {
+    const root = realpathSync(tempRoot());
+    const gitDir = path.join(root, ".git");
+    mkdirSync(gitDir);
+    writeFileSync(
+      path.join(root, "git-config-copy"),
+      '[remote "origin"]\nurl = https://user:ghp_exampleSECRET1234567890@github.com/example/repo.git\n'
+    );
+    symlinkSync(path.join(root, "git-config-copy"), path.join(gitDir, "config"));
+
+    expect(scanRootSafety(root).sensitiveFiles).toContain(path.join(gitDir, "config"));
+  });
+
+  it("detects credential-bearing .gitmodules symlinks inside the root", () => {
+    const root = realpathSync(tempRoot());
+    writeFileSync(
+      path.join(root, "gitmodules-copy"),
+      '[submodule "private"]\nurl = https://user:ghp_exampleSECRET1234567890@github.com/example/private.git\n'
+    );
+    symlinkSync(path.join(root, "gitmodules-copy"), path.join(root, ".gitmodules"));
+
+    expect(scanRootSafety(root).sensitiveFiles).toContain(path.join(root, ".gitmodules"));
+  });
+
+  it("detects git metadata symlinks that escape the root", () => {
+    const root = realpathSync(tempRoot());
+    const other = realpathSync(tempRoot());
+    const gitDir = path.join(root, ".git");
+    mkdirSync(gitDir);
+    writeFileSync(path.join(other, "config"), '[remote "origin"]\nurl = https://github.com/example/repo.git\n');
+    symlinkSync(path.join(other, "config"), path.join(gitDir, "config"));
+
+    expect(scanRootSafety(root).symlinkEscapes).toContain(path.join(gitDir, "config"));
   });
 
   it("builds explicit read-only Codex startup args and sanitized child env", () => {

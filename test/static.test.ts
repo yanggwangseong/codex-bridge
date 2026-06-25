@@ -6,6 +6,7 @@ const SRC_FILES = [
   "src/config.ts",
   "src/jobs.ts",
   "src/redaction.ts",
+  "src/secretPatterns.ts",
   "src/server.ts",
   "src/tools.ts",
   "src/upstream.ts"

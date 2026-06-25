@@ -113,6 +113,31 @@ describe("bridge tools", () => {
     await close();
   });
 
+  it("blocks credential-bearing git metadata before upstream delegation", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    mkdirSync(path.join(root, ".git"));
+    writeFileSync(
+      path.join(root, ".git", "config"),
+      '[remote "origin"]\nurl = https://user:ghp_exampleSECRET1234567890@github.com/org/repo.git\n'
+    );
+    const { client, close } = await connect({ root, upstream });
+
+    const result = await client.callTool({
+      name: "codex_read",
+      arguments: {
+        prompt: "Summarize files."
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+    expect(JSON.stringify(result)).not.toContain("ghp_exampleSECRET1234567890");
+    expect(upstream.calls).toHaveLength(0);
+
+    await close();
+  });
+
   it("fast-returns and later reports completed jobs", async () => {
     const upstream = new DeferredUpstream();
     const { client, close } = await connect({
@@ -147,7 +172,9 @@ describe("bridge tools", () => {
   it("redacts sensitive-looking output", async () => {
     const upstream = new FakeUpstream();
     upstream.callTool = async () =>
-      fakeToolResult('OPENAI_API_KEY=sk-1234567890abcdefghi\nRead /tmp/project/.env.local\nAuthorization: Bearer abcdefghijklmnop');
+      fakeToolResult(
+        'OPENAI_API_KEY=sk-1234567890abcdefghi\nRead /tmp/project/.env.local\nAuthorization: Bearer abcdefghijklmnop\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\nurl = https://user:ghp_exampleSECRET1234567890@github.com/org/repo.git'
+      );
     const { client, close } = await connect({ upstream });
 
     const result = parseToolJson(
@@ -161,7 +188,17 @@ describe("bridge tools", () => {
 
     expect(JSON.stringify(result)).not.toContain("sk-1234567890abcdefghi");
     expect(JSON.stringify(result)).not.toContain("/tmp/project/.env.local");
-    expect(result.redactions).toEqual(expect.arrayContaining(["secret-assignment", "sensitive-path", "bearer-token"]));
+    expect(JSON.stringify(result)).not.toContain("ghp_exampleSECRET1234567890");
+    expect(JSON.stringify(result)).not.toContain("basic abcdefghijklmnop");
+    expect(result.redactions).toEqual(
+      expect.arrayContaining([
+        "secret-assignment",
+        "sensitive-path",
+        "bearer-token",
+        "authorization-header",
+        "url-credentials"
+      ])
+    );
 
     await close();
   });
