@@ -194,6 +194,26 @@ describe("config policy", () => {
     expect(scanRootSafety(root).symlinkEscapes).toContain(path.join(gitDir, "config"));
   });
 
+  it("detects sensitive files and symlink escapes inside git internal directories", () => {
+    const root = realpathSync(tempRoot());
+    const other = realpathSync(tempRoot());
+    const rootHooks = path.join(root, ".git", "hooks");
+    const nestedHooks = path.join(root, "vendor", ".git", "hooks");
+    mkdirSync(rootHooks, { recursive: true });
+    mkdirSync(nestedHooks, { recursive: true });
+    writeFileSync(path.join(rootHooks, ".env"), "TOKEN=secret\n");
+    writeFileSync(path.join(nestedHooks, ".env.local"), "TOKEN=secret\n");
+    symlinkSync(other, path.join(rootHooks, "outside-link"));
+    symlinkSync(other, path.join(nestedHooks, "outside-link"));
+
+    const scan = scanRootSafety(root);
+    expect(scan.sensitiveFiles).toContain(path.join(rootHooks, ".env"));
+    expect(scan.sensitiveFiles).toContain(path.join(nestedHooks, ".env.local"));
+    expect(scan.symlinkEscapes).toContain(path.join(rootHooks, "outside-link"));
+    expect(scan.symlinkEscapes).toContain(path.join(nestedHooks, "outside-link"));
+    expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
   it("detects root gitdir files that point outside the root", () => {
     const root = realpathSync(tempRoot());
     const other = realpathSync(tempRoot());
@@ -212,6 +232,42 @@ describe("config policy", () => {
     const gitDir = path.join(root, "actual.git");
     mkdirSync(gitDir);
     writeFileSync(path.join(root, ".git"), "gitdir: actual.git\n");
+    writeFileSync(path.join(gitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+
+    expect(scanRootSafety(root).sensitiveFiles).toContain(path.join(gitDir, "config"));
+  });
+
+  it("detects nested gitdir files that point outside the root", () => {
+    const root = realpathSync(tempRoot());
+    const other = realpathSync(tempRoot());
+    const nested = path.join(root, "subrepo");
+    const externalGitDir = path.join(other, "actual.git");
+    mkdirSync(nested);
+    mkdirSync(externalGitDir);
+    writeFileSync(path.join(externalGitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+    writeFileSync(path.join(nested, ".git"), `gitdir: ${externalGitDir}\n`);
+
+    const scan = scanRootSafety(root);
+    expect(scan.symlinkEscapes).toContain(path.join(nested, ".git"));
+    expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
+  it("scans nested gitdir files that point inside the root", () => {
+    const root = realpathSync(tempRoot());
+    const nested = path.join(root, "subrepo");
+    const gitDir = path.join(root, "subrepo.git");
+    mkdirSync(nested);
+    mkdirSync(gitDir);
+    writeFileSync(path.join(nested, ".git"), "gitdir: ../subrepo.git\n");
+    writeFileSync(path.join(gitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+
+    expect(scanRootSafety(root).sensitiveFiles).toContain(path.join(gitDir, "config"));
+  });
+
+  it("detects credential-bearing nested git directories", () => {
+    const root = realpathSync(tempRoot());
+    const gitDir = path.join(root, "vendor", ".git");
+    mkdirSync(gitDir, { recursive: true });
     writeFileSync(path.join(gitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
 
     expect(scanRootSafety(root).sensitiveFiles).toContain(path.join(gitDir, "config"));

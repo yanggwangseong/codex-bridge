@@ -370,6 +370,10 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
         continue;
       }
 
+      if (entry.name === ".git") {
+        scanGitMetadataPath(fullPath, 0);
+      }
+
       if (stat.isSymbolicLink()) {
         try {
           const target = realpathSync(fullPath);

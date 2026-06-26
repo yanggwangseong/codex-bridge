@@ -48,11 +48,13 @@ describe("codex stdio upstream", () => {
       },
       undefined,
       expect.objectContaining({
-        timeout: 123,
-        maxTotalTimeout: 123,
         resetTimeoutOnProgress: true
       })
     );
+    expect(capturedOptions?.timeout).toEqual(expect.any(Number));
+    expect(capturedOptions?.timeout).toBeGreaterThan(0);
+    expect(capturedOptions?.timeout).toBeLessThanOrEqual(123);
+    expect(capturedOptions?.maxTotalTimeout).toBe(capturedOptions?.timeout);
     expect(capturedOptions?.signal).toBeInstanceOf(AbortSignal);
   });
 

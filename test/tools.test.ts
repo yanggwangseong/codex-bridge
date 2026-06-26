@@ -162,6 +162,28 @@ describe("bridge tools", () => {
     await close();
   });
 
+  it("blocks git internal sensitive files before upstream delegation", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    mkdirSync(path.join(root, ".git", "hooks"), { recursive: true });
+    writeFileSync(path.join(root, ".git", "hooks", ".env"), "TOKEN=secret\n");
+    const { client, close } = await connect({ root, upstream });
+
+    const result = await client.callTool({
+      name: "codex_read",
+      arguments: {
+        prompt: "Summarize files."
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+    expect(JSON.stringify(result)).not.toContain(".env");
+    expect(upstream.calls).toHaveLength(0);
+
+    await close();
+  });
+
   it("blocks external gitdir metadata before upstream delegation without leaking external paths", async () => {
     const upstream = new FakeUpstream();
     const root = tempRoot();
@@ -176,6 +198,35 @@ describe("bridge tools", () => {
       name: "codex_read",
       arguments: {
         prompt: "Summarize files."
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+    expect(JSON.stringify(result)).not.toContain(realpathSync(other));
+    expect(JSON.stringify(result)).not.toContain("actual.git");
+    expect(upstream.calls).toHaveLength(0);
+
+    await close();
+  });
+
+  it("blocks nested external gitdir metadata before upstream delegation without leaking external paths", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    const other = tempRoot();
+    const nested = path.join(root, "subrepo");
+    const externalGitDir = path.join(other, "actual.git");
+    mkdirSync(nested);
+    mkdirSync(externalGitDir);
+    writeFileSync(path.join(externalGitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+    writeFileSync(path.join(nested, ".git"), `gitdir: ${externalGitDir}\n`);
+    const { client, close } = await connect({ root, upstream });
+
+    const result = await client.callTool({
+      name: "codex_read",
+      arguments: {
+        prompt: "Summarize files.",
+        cwd: nested
       }
     });
 
