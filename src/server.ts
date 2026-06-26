@@ -49,10 +49,10 @@ export function createHttpServer(config: BridgeConfig, upstream: CodexUpstream):
   app.get(
     ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"],
     (_req: Request, res: Response) => {
-      res.status(501).json({
-        error: "oauth_not_implemented",
+      res.status(404).json({
+        error: "oauth_metadata_not_advertised",
         message:
-          "This local bridge is intended for localhost or OpenAI Secure MCP Tunnel testing. Public authenticated ChatGPT access requires OAuth 2.1 in front of the bridge."
+          "This local bridge does not advertise OAuth metadata. Public authenticated ChatGPT access requires OAuth 2.1 in front of the bridge."
       });
     }
   );

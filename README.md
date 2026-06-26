@@ -117,6 +117,7 @@ Repository contents are treated as untrusted data. The bridge prepends instructi
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CODEX_BRIDGE_ROOT` | current directory | The single allowed repo root. Must be absolute for normal use. |
+| `CODEX_BRIDGE_TRANSPORT` | `http` | Bridge transport. Use `http` for the local `/mcp` server, or `stdio` when a tunnel runtime launches the bridge as a local MCP command. |
 | `CODEX_BRIDGE_HOST` | `127.0.0.1` | Bind host. Non-local binds are rejected because OAuth is not implemented. |
 | `CODEX_BRIDGE_PORT` | `8765` | HTTP port. |
 | `CODEX_BRIDGE_ALLOWED_HOSTS` | unset | Complete hostname allowlist for MCP DNS rebinding protection. Hostnames only; no scheme, port, path, query, or fragment. If set, include `127.0.0.1`/`localhost` for direct local clients as needed. |
@@ -172,13 +173,24 @@ If `codex_read` returns `status: "running"`, copy the exact `jobId` and call `co
 
 Secure MCP Tunnel is the preferred local development path because it connects private MCP servers to supported OpenAI products without exposing the local server publicly. This project does not create tunnels, store tunnel credentials, or configure OpenAI tunnel settings automatically.
 
-Use the OpenAI tunnel tooling manually, point it at:
+For OpenAI `tunnel-client`, prefer launching the bridge as a local stdio MCP command:
 
-```text
-http://127.0.0.1:8765/mcp
+```bash
+CODEX_BRIDGE_TRANSPORT=stdio \
+CODEX_BRIDGE_ROOT="/sanitized/company/repo" \
+CODEX_BRIDGE_TOKEN="$(openssl rand -hex 32)" \
+CODEX_BRIDGE_COMPANY_MODE=1 \
+CODEX_BRIDGE_ROOT_ISOLATION_ACK=1 \
+CODEX_BRIDGE_CODEX="$(command -v codex)" \
+CODEX_BRIDGE_COMPANY_HOME="/sanitized/company/runtime-home" \
+CODEX_BRIDGE_COMPANY_CODEX_HOME="/sanitized/company/runtime-home" \
+CODEX_BRIDGE_COMPANY_TMPDIR="/sanitized/company/runtime-tmp" \
+node dist/cli.js
 ```
 
-Then register the tunnel HTTPS URL in ChatGPT.
+The stdio form avoids HTTP OAuth protected-resource discovery because the tunnel runtime owns the external connection and starts this bridge locally. The HTTP `/mcp` server remains available for direct local MCP client tests and for deployments that put a real OAuth 2.1 layer in front of the bridge.
+
+Then register the OpenAI tunnel in ChatGPT.
 
 Keep the bridge bound to localhost and do not set `CODEX_BRIDGE_PUBLIC_BASE_URL` for Secure MCP Tunnel testing. The tunnel URL is registered in ChatGPT, not trusted by this bridge as proof that a public URL is safe.
 

@@ -104,15 +104,15 @@ describe("http server", () => {
     await client.close();
   });
 
-  it("returns not implemented OAuth metadata response", async () => {
+  it("does not advertise OAuth metadata", async () => {
     const baseUrl = await start({
       CODEX_BRIDGE_NO_AUTH: "1",
       CODEX_BRIDGE_LOCAL_SMOKE_TEST: "1"
     });
 
     const response = await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`);
-    expect(response.status).toBe(501);
-    expect(await response.json()).toMatchObject({ error: "oauth_not_implemented" });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: "oauth_metadata_not_advertised" });
   });
 
   it("releases HTTP concurrency and codex_read job slots when MCP clients abort mid-request", async () => {
