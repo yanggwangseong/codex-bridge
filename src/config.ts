@@ -141,7 +141,10 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     let stat;
     try {
       stat = lstatSync(fullPath);
-    } catch {
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        addFinding(sensitiveFiles, findingPath);
+      }
       return;
     }
 
@@ -221,6 +224,7 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     try {
       inspectedKey = realpathSync(readPath);
     } catch {
+      addFinding(sensitiveFiles, findingPath);
       return;
     }
     if (inspectedGitMetadataFiles.has(inspectedKey)) {
@@ -235,6 +239,7 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
       }
       inspectGitConfigIncludes(readPath, findingPath, content, depth + 1);
     } catch {
+      addFinding(sensitiveFiles, findingPath);
       return;
     }
   }
@@ -248,7 +253,10 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     let stat;
     try {
       stat = lstatSync(metadataPath);
-    } catch {
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        addFinding(sensitiveFiles, metadataPath);
+      }
       return;
     }
 
@@ -290,6 +298,7 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     try {
       entries = readdirSync(dir, { withFileTypes: true });
     } catch {
+      addFinding(sensitiveFiles, dir);
       return;
     }
 
@@ -453,6 +462,12 @@ function unquoteGitConfigValue(raw: string): string {
       .trim();
   }
   return value.trim();
+}
+
+function isMissingPathError(error: unknown): boolean {
+  const code =
+    typeof error === "object" && error !== null && "code" in error ? (error as { code?: unknown }).code : undefined;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 export function assertRootSafeForDelegation(root: string): void {

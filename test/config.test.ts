@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -192,6 +192,56 @@ describe("config policy", () => {
     symlinkSync(path.join(other, "config"), path.join(gitDir, "config"));
 
     expect(scanRootSafety(root).symlinkEscapes).toContain(path.join(gitDir, "config"));
+  });
+
+  it("fails closed when git metadata cannot be inspected", () => {
+    const restore: Array<{ target: string; mode: number }> = [];
+    const makeUnreadable = (target: string, mode: number) => {
+      chmodSync(target, 0o000);
+      restore.push({ target, mode });
+    };
+
+    try {
+      const rootWithUnreadableConfig = realpathSync(tempRoot());
+      const rootGitDir = path.join(rootWithUnreadableConfig, ".git");
+      mkdirSync(rootGitDir);
+      const rootConfig = path.join(rootGitDir, "config");
+      writeFileSync(rootConfig, "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+      makeUnreadable(rootConfig, 0o600);
+
+      const rootWithUnreadableGitDir = realpathSync(tempRoot());
+      const unreadableRootGitDir = path.join(rootWithUnreadableGitDir, ".git");
+      mkdirSync(unreadableRootGitDir);
+      makeUnreadable(unreadableRootGitDir, 0o700);
+
+      const nestedWithUnreadableConfig = realpathSync(tempRoot());
+      const nestedGitDir = path.join(nestedWithUnreadableConfig, "vendor", ".git");
+      mkdirSync(nestedGitDir, { recursive: true });
+      const nestedConfig = path.join(nestedGitDir, "config");
+      writeFileSync(nestedConfig, "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+      makeUnreadable(nestedConfig, 0o600);
+
+      const nestedWithUnreadableGitDir = realpathSync(tempRoot());
+      const unreadableNestedGitDir = path.join(nestedWithUnreadableGitDir, "vendor", ".git");
+      mkdirSync(unreadableNestedGitDir, { recursive: true });
+      makeUnreadable(unreadableNestedGitDir, 0o700);
+
+      const cases = [
+        { root: rootWithUnreadableConfig, finding: rootConfig },
+        { root: rootWithUnreadableGitDir, finding: unreadableRootGitDir },
+        { root: nestedWithUnreadableConfig, finding: nestedConfig },
+        { root: nestedWithUnreadableGitDir, finding: unreadableNestedGitDir }
+      ];
+
+      for (const entry of cases) {
+        expect(scanRootSafety(entry.root).sensitiveFiles).toContain(entry.finding);
+        expect(() => assertRootSafeForDelegation(entry.root)).toThrow(/safe per-file exclusion/);
+      }
+    } finally {
+      for (const entry of restore.reverse()) {
+        chmodSync(entry.target, entry.mode);
+      }
+    }
   });
 
   it("detects sensitive files and symlink escapes inside git internal directories", () => {

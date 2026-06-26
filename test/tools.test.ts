@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -182,6 +182,33 @@ describe("bridge tools", () => {
     expect(upstream.calls).toHaveLength(0);
 
     await close();
+  });
+
+  it("blocks unreadable git metadata before upstream delegation", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    const gitDir = path.join(root, ".git");
+    mkdirSync(gitDir);
+    const config = path.join(gitDir, "config");
+    writeFileSync(config, "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+    chmodSync(config, 0o000);
+    const { client, close } = await connect({ root, upstream });
+
+    try {
+      const result = await client.callTool({
+        name: "codex_read",
+        arguments: {
+          prompt: "Summarize files."
+        }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+      expect(upstream.calls).toHaveLength(0);
+    } finally {
+      chmodSync(config, 0o600);
+      await close();
+    }
   });
 
   it("blocks external gitdir metadata before upstream delegation without leaking external paths", async () => {
