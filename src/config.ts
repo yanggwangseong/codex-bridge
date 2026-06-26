@@ -362,7 +362,10 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        addFinding(sensitiveFiles, dir);
+      }
       return;
     }
 
@@ -375,7 +378,10 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
       let stat;
       try {
         stat = lstatSync(fullPath);
-      } catch {
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          addFinding(sensitiveFiles, fullPath);
+        }
         continue;
       }
 

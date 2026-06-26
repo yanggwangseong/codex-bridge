@@ -211,6 +211,32 @@ describe("bridge tools", () => {
     }
   });
 
+  it("blocks unlistable directories before upstream delegation", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    const hidden = path.join(root, "hidden");
+    mkdirSync(hidden);
+    writeFileSync(path.join(hidden, ".env"), "TOKEN=secret\n");
+    chmodSync(hidden, 0o111);
+    const { client, close } = await connect({ root, upstream });
+
+    try {
+      const result = await client.callTool({
+        name: "codex_read",
+        arguments: {
+          prompt: "Summarize files."
+        }
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+      expect(upstream.calls).toHaveLength(0);
+    } finally {
+      chmodSync(hidden, 0o700);
+      await close();
+    }
+  });
+
   it("blocks external gitdir metadata before upstream delegation without leaking external paths", async () => {
     const upstream = new FakeUpstream();
     const root = tempRoot();

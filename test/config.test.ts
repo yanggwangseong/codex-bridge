@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -112,6 +112,24 @@ describe("config policy", () => {
     expect(scan.symlinkEscapes).toContain(path.join(root, "node_modules", "package", "outside-link"));
     expect(scan.sensitiveFiles).toContain(path.join(root, "dist", ".env.local"));
     expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
+  it("fails closed when a directory cannot be listed but known paths remain reachable", () => {
+    const root = realpathSync(tempRoot());
+    const hidden = path.join(root, "hidden");
+    const secret = path.join(hidden, ".env");
+    mkdirSync(hidden);
+    writeFileSync(secret, "TOKEN=secret\n");
+    chmodSync(hidden, 0o111);
+
+    try {
+      expect(readFileSync(secret, "utf8")).toBe("TOKEN=secret\n");
+      const scan = scanRootSafety(root);
+      expect(scan.sensitiveFiles).toContain(hidden);
+      expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+    } finally {
+      chmodSync(hidden, 0o700);
+    }
   });
 
   it("does not include external realpaths in cwd escape errors", () => {
