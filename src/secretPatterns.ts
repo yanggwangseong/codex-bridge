@@ -7,6 +7,7 @@ const OPENAI_KEY = /\bsk-[A-Za-z0-9_-]{16,}\b/g;
 const BEARER = /\bBearer\s+[A-Za-z0-9_./+=:@-]{12,}\b/gi;
 const AUTHORIZATION_HEADER = /\bAuthorization\s*:\s*(?:Basic|Bearer)\s+[A-Za-z0-9_./+=:@-]{8,}/gi;
 const URL_USERINFO = /\b([A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/\s"'`<>@]+)@(?=[^/\s"'`<>]+)/g;
+const SLACK_WEBHOOK = /\bhttps:\/\/hooks\.slack(?:-gov)?\.com\/services\/[A-Za-z0-9/_-]{20,}/g;
 const COMMON_PROVIDER_TOKEN =
   /\b(?:gh[pousr]_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{10,}|npm_[A-Za-z0-9]{10,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16})\b/g;
 
@@ -16,6 +17,7 @@ const DETECTION_PATTERNS = [
   OPENAI_KEY,
   BEARER,
   AUTHORIZATION_HEADER,
+  SLACK_WEBHOOK,
   COMMON_PROVIDER_TOKEN
 ];
 
@@ -43,6 +45,10 @@ export function redactSecretPatterns(input: string, record: RedactionRecorder): 
   text = text.replace(AUTHORIZATION_HEADER, () => {
     record("authorization-header");
     return "Authorization: [redacted]";
+  });
+  text = text.replace(SLACK_WEBHOOK, () => {
+    record("slack-webhook");
+    return "[redacted-slack-webhook]";
   });
   text = text.replace(URL_USERINFO, (match, scheme: string, userinfo: string) => {
     if (!isSensitiveUrlUserinfo(userinfo)) {

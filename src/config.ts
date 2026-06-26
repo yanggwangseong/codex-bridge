@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, type Stats } from "node:fs";
 import path from "node:path";
 import { containsSecretPattern } from "./secretPatterns.js";
 
@@ -13,6 +13,8 @@ export type BridgeConfig = {
   localSmokeTest: boolean;
   tunnelMode: TunnelMode;
   publicBaseUrl?: string;
+  companyMode: boolean;
+  rootIsolationAcknowledged: boolean;
   codexCommand: string;
   allowedRoot: string;
   safePath: string;
@@ -35,6 +37,10 @@ export type SafetyScanResult = {
   symlinkEscapes: string[];
 };
 
+export type SafetyScanOptions = {
+  scanFileContents?: boolean;
+};
+
 export const OPENAI_API_ENV_NAMES = [
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
@@ -46,6 +52,59 @@ export const OPENAI_API_ENV_NAMES = [
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 const GIT_METADATA_MAX_BYTES = 256 * 1024;
+const CONTENT_SCAN_MAX_BYTES = 1024 * 1024;
+const CONTENT_SCANNABLE_EXTENSIONS = new Set([
+  ".bash",
+  ".c",
+  ".cfg",
+  ".conf",
+  ".cpp",
+  ".cs",
+  ".css",
+  ".env",
+  ".go",
+  ".graphql",
+  ".h",
+  ".hpp",
+  ".html",
+  ".ini",
+  ".java",
+  ".js",
+  ".json",
+  ".jsonc",
+  ".jsx",
+  ".kt",
+  ".kts",
+  ".mjs",
+  ".php",
+  ".properties",
+  ".proto",
+  ".py",
+  ".rb",
+  ".rs",
+  ".scss",
+  ".sh",
+  ".sql",
+  ".swift",
+  ".toml",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".zsh"
+]);
+const CONTENT_SCANNABLE_BASENAMES = new Set(["dockerfile", "gemfile", "makefile", "procfile", "rakefile"]);
+const CONTENT_SCAN_SKIPPED_DIRS = new Set([
+  ".cache",
+  ".next",
+  ".turbo",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules"
+]);
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): BridgeConfig {
   const host = optional(env.CODEX_BRIDGE_HOST) || "127.0.0.1";
@@ -55,6 +114,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
   const localSmokeTest = parseBool(env.CODEX_BRIDGE_LOCAL_SMOKE_TEST);
   const tunnelMode = parseTunnelMode(optional(env.CODEX_BRIDGE_TUNNEL_MODE) || "none");
   const publicBaseUrl = optional(env.CODEX_BRIDGE_PUBLIC_BASE_URL);
+  const companyMode = parseBool(env.CODEX_BRIDGE_COMPANY_MODE);
+  const rootIsolationAcknowledged = parseBool(env.CODEX_BRIDGE_ROOT_ISOLATION_ACK);
   const allowOpenAiApiEnvForTest = parseBool(env.CODEX_BRIDGE_ALLOW_OPENAI_API_ENV_FOR_TEST);
   const allowedRoot = parseAllowedRoot(optional(env.CODEX_BRIDGE_ROOT) || cwd);
 
@@ -65,7 +126,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     noAuth,
     localSmokeTest,
     tunnelMode,
-    publicBaseUrl
+    publicBaseUrl,
+    companyMode,
+    rootIsolationAcknowledged
   });
 
   const upstreamTimeoutMs = parsePositiveInt(optional(env.CODEX_BRIDGE_UPSTREAM_TIMEOUT_MS) || "180000");
@@ -83,6 +146,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     localSmokeTest,
     tunnelMode,
     publicBaseUrl,
+    companyMode,
+    rootIsolationAcknowledged,
     codexCommand: optional(env.CODEX_BRIDGE_CODEX) || "codex",
     allowedRoot,
     safePath: optional(env.CODEX_BRIDGE_SAFE_PATH) || defaultSafePath(env),
@@ -121,10 +186,11 @@ export function resolveAllowedCwd(input: string | undefined, config: BridgeConfi
   return cwd;
 }
 
-export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult {
+export function scanRootSafety(root: string, maxFindings = 30, options: SafetyScanOptions = {}): SafetyScanResult {
   const sensitiveFiles: string[] = [];
   const symlinkEscapes: string[] = [];
   const inspectedGitMetadataFiles = new Set<string>();
+  const inspectedContentFiles = new Set<string>();
 
   function addFinding(list: string[], value: string): void {
     if (list.length < maxFindings && !list.includes(value)) {
@@ -241,6 +307,36 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     } catch {
       addFinding(sensitiveFiles, findingPath);
       return;
+    }
+  }
+
+  function inspectOrdinaryFileContent(readPath: string, stat: Stats, findingPath = readPath): void {
+    if (!options.scanFileContents || !stat.isFile() || !isOrdinaryContentScanCandidate(readPath)) {
+      return;
+    }
+    if (stat.size > CONTENT_SCAN_MAX_BYTES) {
+      addFinding(sensitiveFiles, findingPath);
+      return;
+    }
+
+    let inspectedKey = readPath;
+    try {
+      inspectedKey = realpathSync(readPath);
+    } catch {
+      addFinding(sensitiveFiles, findingPath);
+      return;
+    }
+    if (inspectedContentFiles.has(inspectedKey)) {
+      return;
+    }
+    inspectedContentFiles.add(inspectedKey);
+
+    try {
+      if (containsSecretPattern(readFileSync(readPath, "utf8"))) {
+        addFinding(sensitiveFiles, findingPath);
+      }
+    } catch {
+      addFinding(sensitiveFiles, findingPath);
     }
   }
 
@@ -403,8 +499,25 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
 
       if (stat.isDirectory()) {
         walk(fullPath);
+        continue;
       }
+
+      inspectOrdinaryFileContent(fullPath, stat);
     }
+  }
+
+  function isOrdinaryContentScanCandidate(fullPath: string): boolean {
+    const relative = path.relative(root, fullPath);
+    if (!relative || relative.startsWith("..")) {
+      return false;
+    }
+    const parts = relative.split(path.sep);
+    if (parts.some((part) => CONTENT_SCAN_SKIPPED_DIRS.has(part)) || parts.includes(".git")) {
+      return false;
+    }
+
+    const basename = path.basename(fullPath).toLowerCase();
+    return CONTENT_SCANNABLE_EXTENSIONS.has(path.extname(basename)) || CONTENT_SCANNABLE_BASENAMES.has(basename);
   }
 
   if (existsSync(root) && statSync(root).isDirectory()) {
@@ -476,8 +589,8 @@ function isMissingPathError(error: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-export function assertRootSafeForDelegation(root: string): void {
-  const scan = scanRootSafety(root);
+export function assertRootSafeForDelegation(root: string, options: SafetyScanOptions = {}): void {
+  const scan = scanRootSafety(root, 30, options);
   const messages: string[] = [];
   if (scan.sensitiveFiles.length > 0) {
     messages.push(`sensitive-looking files: ${scan.sensitiveFiles.join(", ")}`);
@@ -577,12 +690,32 @@ function validateExposurePolicy(input: {
   localSmokeTest: boolean;
   tunnelMode: TunnelMode;
   publicBaseUrl?: string;
+  companyMode: boolean;
+  rootIsolationAcknowledged: boolean;
 }): void {
   if (!LOCAL_HOSTS.has(input.host)) {
     throw new Error("This bridge must bind to 127.0.0.1/localhost because OAuth 2.1 public auth is not implemented.");
   }
   if (input.noAuth && input.token) {
     throw new Error("CODEX_BRIDGE_NO_AUTH and CODEX_BRIDGE_TOKEN are mutually exclusive.");
+  }
+  if (input.companyMode) {
+    if (!input.rootIsolationAcknowledged) {
+      throw new Error(
+        "CODEX_BRIDGE_COMPANY_MODE=1 requires CODEX_BRIDGE_ROOT_ISOLATION_ACK=1 after running the bridge under OS/container isolation with only the sanitized target root visible."
+      );
+    }
+    if (input.noAuth) {
+      throw new Error("CODEX_BRIDGE_COMPANY_MODE=1 forbids CODEX_BRIDGE_NO_AUTH.");
+    }
+    if (!input.token) {
+      throw new Error("CODEX_BRIDGE_COMPANY_MODE=1 requires CODEX_BRIDGE_TOKEN.");
+    }
+    if (input.publicBaseUrl) {
+      throw new Error(
+        "CODEX_BRIDGE_COMPANY_MODE=1 does not accept CODEX_BRIDGE_PUBLIC_BASE_URL. Keep the bridge localhost-only behind an externally controlled secure tunnel or OAuth layer."
+      );
+    }
   }
   if (!input.token && !input.noAuth) {
     throw new Error("Set CODEX_BRIDGE_TOKEN, or set CODEX_BRIDGE_NO_AUTH=1 with CODEX_BRIDGE_LOCAL_SMOKE_TEST=1.");

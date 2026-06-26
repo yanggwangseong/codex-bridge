@@ -74,6 +74,49 @@ describe("config policy", () => {
     ).toThrow(/PUBLIC_BASE_URL cannot be set in no-auth mode/);
   });
 
+  it("requires stricter startup guardrails in company mode", () => {
+    const root = tempRoot();
+
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_COMPANY_MODE: "1"
+      })
+    ).toThrow(/ROOT_ISOLATION_ACK/);
+
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_NO_AUTH: "1",
+        CODEX_BRIDGE_LOCAL_SMOKE_TEST: "1",
+        CODEX_BRIDGE_COMPANY_MODE: "1",
+        CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
+      })
+    ).toThrow(/forbids CODEX_BRIDGE_NO_AUTH/);
+
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_COMPANY_MODE: "1",
+        CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1",
+        CODEX_BRIDGE_TUNNEL_MODE: "openai-secure",
+        CODEX_BRIDGE_PUBLIC_BASE_URL: "https://example.ngrok.app"
+      })
+    ).toThrow(/does not accept CODEX_BRIDGE_PUBLIC_BASE_URL/);
+
+    const config = loadConfig({
+      CODEX_BRIDGE_ROOT: root,
+      CODEX_BRIDGE_TOKEN: "secret",
+      CODEX_BRIDGE_COMPANY_MODE: "1",
+      CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
+    });
+    expect(config.companyMode).toBe(true);
+    expect(config.noAuth).toBe(false);
+    expect(config.allowedRoot).toBe(realpathSync(root));
+  });
+
   it("validates allowed host values as hostnames without schemes or ports", () => {
     const root = tempRoot();
     const config = loadConfig({
@@ -146,6 +189,19 @@ describe("config policy", () => {
     expect(scan.sensitiveFiles).toContain(path.join(root, ".env"));
     expect(scan.symlinkEscapes).toContain(path.join(root, "outside-link"));
     expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
+  it("detects ordinary source-file secrets when content scanning is enabled", () => {
+    const root = tempRoot();
+    const source = path.join(root, "config.ts");
+    const slackWebhook = "https://hooks.slack.com/services/T00000000/B00000000/SECRETSECRETSECRET";
+    writeFileSync(source, `export const SLACK_WEBHOOK_URL = "${slackWebhook}";\n`);
+
+    expect(scanRootSafety(root).sensitiveFiles).not.toContain(source);
+
+    const scan = scanRootSafety(root, 30, { scanFileContents: true });
+    expect(scan.sensitiveFiles).toContain(source);
+    expect(() => assertRootSafeForDelegation(root, { scanFileContents: true })).toThrow(/safe per-file exclusion/);
   });
 
   it("detects sensitive files and symlink escapes inside generated dependency directories", () => {

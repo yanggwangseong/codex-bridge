@@ -53,6 +53,39 @@ describe("bridge tools", () => {
     await close();
   });
 
+  it("redacts the absolute root from bridge_status in company mode", async () => {
+    const root = tempRoot();
+    const upstream = new FakeUpstream();
+    const { client, close } = await connect({
+      root,
+      upstream,
+      env: {
+        CODEX_BRIDGE_NO_AUTH: undefined,
+        CODEX_BRIDGE_LOCAL_SMOKE_TEST: undefined,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_COMPANY_MODE: "1",
+        CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
+      }
+    });
+    const status = parseToolJson(
+      await client.callTool({
+        name: "bridge_status",
+        arguments: {}
+      })
+    );
+
+    expect(status.allowedRoot).toBe("[redacted-company-root]");
+    expect(JSON.stringify(status)).not.toContain(realpathSync(root));
+    expect(status.safety).toMatchObject({
+      companyMode: true,
+      rootPathDisclosure: "redacted",
+      rootIsolation: "externally-acknowledged"
+    });
+    expect(upstream.calls).toHaveLength(0);
+
+    await close();
+  });
+
   it("forces read-only Codex payload and per-session config", async () => {
     const upstream = new FakeUpstream();
     const root = tempRoot();
@@ -157,6 +190,39 @@ describe("bridge tools", () => {
     expect(result.isError).toBe(true);
     expect(JSON.stringify(result)).toContain("safe per-file exclusion");
     expect(JSON.stringify(result)).not.toContain("ghp_exampleSECRET1234567890");
+    expect(upstream.calls).toHaveLength(0);
+
+    await close();
+  });
+
+  it("blocks ordinary source-file secrets before upstream delegation in company mode", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    const slackWebhook = "https://hooks.slack.com/services/T00000000/B00000000/SECRETSECRETSECRET";
+    writeFileSync(path.join(root, "config.ts"), `export const SLACK_WEBHOOK_URL = "${slackWebhook}";\n`);
+    const { client, close } = await connect({
+      root,
+      upstream,
+      env: {
+        CODEX_BRIDGE_NO_AUTH: undefined,
+        CODEX_BRIDGE_LOCAL_SMOKE_TEST: undefined,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_COMPANY_MODE: "1",
+        CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
+      }
+    });
+
+    const result = await client.callTool({
+      name: "codex_read",
+      arguments: {
+        prompt: "Summarize files."
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+    expect(JSON.stringify(result)).not.toContain(slackWebhook);
+    expect(JSON.stringify(result)).not.toContain(realpathSync(root));
     expect(upstream.calls).toHaveLength(0);
 
     await close();
@@ -353,7 +419,14 @@ describe("bridge tools", () => {
     const upstream = new FakeUpstream();
     upstream.callTool = async () =>
       fakeToolResult(
-        'OPENAI_API_KEY=sk-1234567890abcdefghi\nRead /tmp/project/.env.local\nAuthorization: Bearer abcdefghijklmnop\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\nurl = https://user:ghp_exampleSECRET1234567890@github.com/org/repo.git'
+        [
+          "OPENAI_API_KEY=sk-1234567890abcdefghi",
+          "Read /tmp/project/.env.local",
+          "Authorization: Bearer abcdefghijklmnop",
+          "extraheader = AUTHORIZATION: basic abcdefghijklmnop",
+          "url = https://user:ghp_exampleSECRET1234567890@github.com/org/repo.git",
+          "webhook = https://hooks.slack.com/services/T00000000/B00000000/SECRETSECRETSECRET"
+        ].join("\n")
       );
     const { client, close } = await connect({ upstream });
 
@@ -370,13 +443,15 @@ describe("bridge tools", () => {
     expect(JSON.stringify(result)).not.toContain("/tmp/project/.env.local");
     expect(JSON.stringify(result)).not.toContain("ghp_exampleSECRET1234567890");
     expect(JSON.stringify(result)).not.toContain("basic abcdefghijklmnop");
+    expect(JSON.stringify(result)).not.toContain("hooks.slack.com/services");
     expect(result.redactions).toEqual(
       expect.arrayContaining([
         "secret-assignment",
         "sensitive-path",
         "bearer-token",
         "authorization-header",
-        "url-credentials"
+        "url-credentials",
+        "slack-webhook"
       ])
     );
 

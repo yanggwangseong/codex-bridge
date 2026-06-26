@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
-import { CodexStdioUpstream } from "../src/upstream.js";
+import { buildCodexReadPayload, CodexStdioUpstream } from "../src/upstream.js";
 import { fakeToolResult, tempRoot } from "./helpers.js";
 
 describe("codex stdio upstream", () => {
@@ -263,6 +263,25 @@ describe("codex stdio upstream", () => {
     await expect(upstream.callTool("codex", { prompt: "first" }, 1000)).rejects.toThrow("first connect failed");
     await expect(upstream.callTool("codex", { prompt: "second" }, 1000)).resolves.toEqual(fakeToolResult("ok"));
     expect(attempts).toBe(2);
+  });
+
+  it("does not echo the absolute root in company-mode policy prompts", () => {
+    const root = tempRoot();
+    const config = loadConfig({
+      CODEX_BRIDGE_ROOT: root,
+      CODEX_BRIDGE_TOKEN: "secret",
+      CODEX_BRIDGE_COMPANY_MODE: "1",
+      CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
+    });
+
+    const payload = buildCodexReadPayload({
+      config,
+      prompt: "Summarize files.",
+      cwd: config.allowedRoot
+    });
+
+    expect(String(payload.prompt)).toContain("configured working directory");
+    expect(String(payload.prompt)).not.toContain(config.allowedRoot);
   });
 });
 

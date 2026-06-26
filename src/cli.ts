@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   server.listen(config.port, config.host, () => {
     const authHint = config.noAuth ? "local no-auth smoke mode" : "Authorization bearer required";
     console.log(`codex-bridge listening on http://${config.host}:${config.port}/mcp (${authHint})`);
-    console.log(`allowed root: ${config.allowedRoot}`);
+    console.log(`allowed root: ${config.companyMode ? "[redacted-company-root]" : config.allowedRoot}`);
     console.log("exposed tools: bridge_status, codex_read, codex_job_status");
   });
 

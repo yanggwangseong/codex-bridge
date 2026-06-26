@@ -20,7 +20,7 @@ export function registerBridgeTools(
     {
       title: "Bridge Status",
       description:
-        "Read-only status check for the local Codex bridge. Returns safety policy, configured root, exposed tools, job counts, and upstream Codex MCP tool availability. Does not read repository files.",
+        "Read-only status check for the local Codex bridge. Returns safety policy, configured root identifier, exposed tools, job counts, and upstream Codex MCP tool availability. Does not read repository files.",
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
@@ -34,7 +34,7 @@ export function registerBridgeTools(
       return jsonResult({
         ok: true,
         bridge: "codex-bridge",
-        allowedRoot: config.allowedRoot,
+        allowedRoot: displayAllowedRoot(config),
         bind: {
           host: config.host,
           port: config.port
@@ -53,10 +53,14 @@ export function registerBridgeTools(
           maxConcurrentCodexReads: config.maxConcurrentCodexReads
         },
         safety: {
+          companyMode: config.companyMode,
+          rootPathDisclosure: config.companyMode ? "redacted" : "full",
+          rootIsolation: config.companyMode ? "externally-acknowledged" : "not-required-for-personal-local-mode",
           publicDirectOAuthImplemented: false,
           noAuthLocalOnly: true,
           openAiApiEnvForwarded: false,
           writeToolsExposed: false,
+          contentSecretScan: config.companyMode ? "enabled-before-codex_read" : "disabled",
           rootScan: summarizeSafetyScan(scanRootSafety(config.allowedRoot))
         },
         trackedJobs: jobs.size,
@@ -99,7 +103,7 @@ export function registerBridgeTools(
       }
     },
     async (args, extra) => {
-      assertRootSafeForDelegation(config.allowedRoot);
+      assertRootSafeForDelegation(config.allowedRoot, rootSafetyScanOptions(config));
       const cwd = resolveAllowedCwd(args.cwd, config);
       return runCodexReadWithFastReturn({
         config,
@@ -225,6 +229,16 @@ function summarizeSafetyScan(scan: ReturnType<typeof scanRootSafety>) {
     symlinkEscapeCount: scan.symlinkEscapes.length,
     blocked: scan.sensitiveFiles.length > 0 || scan.symlinkEscapes.length > 0
   };
+}
+
+function rootSafetyScanOptions(config: BridgeConfig) {
+  return {
+    scanFileContents: config.companyMode
+  };
+}
+
+function displayAllowedRoot(config: BridgeConfig): string {
+  return config.companyMode ? "[redacted-company-root]" : config.allowedRoot;
 }
 
 function jobsRunningExpiry(config: BridgeConfig): string {
