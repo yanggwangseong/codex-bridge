@@ -31,6 +31,19 @@ describe("config policy", () => {
     expect(config.allowedRoot).toBe(realpathSync(root));
   });
 
+  it("rejects ambiguous no-auth and bearer-token configuration", () => {
+    const root = tempRoot();
+
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_NO_AUTH: "1",
+        CODEX_BRIDGE_LOCAL_SMOKE_TEST: "1"
+      })
+    ).toThrow(/mutually exclusive/);
+  });
+
   it("rejects non-local bind and public generic no-auth exposure", () => {
     const root = tempRoot();
 
@@ -45,11 +58,47 @@ describe("config policy", () => {
     expect(() =>
       loadConfig({
         CODEX_BRIDGE_ROOT: root,
-        CODEX_BRIDGE_NO_AUTH: "1",
-        CODEX_BRIDGE_LOCAL_SMOKE_TEST: "1",
+        CODEX_BRIDGE_TOKEN: "secret",
         CODEX_BRIDGE_PUBLIC_BASE_URL: "https://example.ngrok.app"
       })
     ).toThrow(/Public\/generic/);
+
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_NO_AUTH: "1",
+        CODEX_BRIDGE_LOCAL_SMOKE_TEST: "1",
+        CODEX_BRIDGE_TUNNEL_MODE: "openai-secure",
+        CODEX_BRIDGE_PUBLIC_BASE_URL: "https://example.ngrok.app"
+      })
+    ).toThrow(/PUBLIC_BASE_URL cannot be set in no-auth mode/);
+  });
+
+  it("validates allowed host values as hostnames without schemes or ports", () => {
+    const root = tempRoot();
+    const config = loadConfig({
+      CODEX_BRIDGE_ROOT: root,
+      CODEX_BRIDGE_TOKEN: "secret",
+      CODEX_BRIDGE_ALLOWED_HOSTS: "localhost,127.0.0.1,[::1],example.ngrok.app,localhost"
+    });
+
+    expect(config.allowedHosts).toEqual(["localhost", "127.0.0.1", "[::1]", "example.ngrok.app"]);
+
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_ALLOWED_HOSTS: "https://example.ngrok.app"
+      })
+    ).toThrow(/hostnames only/);
+
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_ALLOWED_HOSTS: "example.ngrok.app:443"
+      })
+    ).toThrow(/without ports/);
   });
 
   it("fails closed when OpenAI API env names are present", () => {

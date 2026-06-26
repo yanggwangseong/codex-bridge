@@ -53,6 +53,24 @@ describe("http server", () => {
     expect(allowed.status).not.toBe(401);
   });
 
+  it("treats CODEX_BRIDGE_ALLOWED_HOSTS as a complete hostname allowlist", async () => {
+    const baseUrl = await start({
+      CODEX_BRIDGE_NO_AUTH: "1",
+      CODEX_BRIDGE_LOCAL_SMOKE_TEST: "1",
+      CODEX_BRIDGE_ALLOWED_HOSTS: "127.0.0.1,example.ngrok.app"
+    });
+
+    const local = await fetch(`${baseUrl}/healthz`);
+    expect(local.status).toBe(200);
+
+    const allowedHost = await requestWithHost(`${baseUrl}/healthz`, "example.ngrok.app");
+    expect(allowedHost.status).toBe(200);
+
+    const deniedHost = await requestWithHost(`${baseUrl}/healthz`, "localhost");
+    expect(deniedHost.status).toBe(403);
+    expect(deniedHost.body).toContain("Invalid Host");
+  });
+
   it("keeps async codex_read jobs across stateless HTTP MCP requests", async () => {
     const upstream = new DeferredUpstream();
     const baseUrl = await start(
@@ -233,6 +251,35 @@ async function start(env: NodeJS.ProcessEnv, upstream: CodexUpstream = new FakeU
     throw new Error("Expected TCP server address.");
   }
   return `http://127.0.0.1:${address.port}`;
+}
+
+async function requestWithHost(urlString: string, host: string): Promise<{ status: number; body: string }> {
+  const url = new URL(urlString);
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: `${url.pathname}${url.search}`,
+        method: "GET",
+        headers: {
+          host
+        }
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode || 0,
+            body: Buffer.concat(chunks).toString("utf8")
+          });
+        });
+      }
+    );
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 async function waitForJobStatus(client: Client, jobId: string, expected: string): Promise<Record<string, any>> {

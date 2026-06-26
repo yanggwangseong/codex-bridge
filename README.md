@@ -33,13 +33,12 @@ Do not set `OPENAI_API_KEY` for this bridge. If any OpenAI API env name is prese
 
 ## Run Locally
 
-No-auth is intentionally limited to localhost smoke testing or OpenAI Secure MCP Tunnel testing:
+No-auth is intentionally limited to localhost smoke testing or OpenAI Secure MCP Tunnel testing. Do not set `CODEX_BRIDGE_TOKEN` together with `CODEX_BRIDGE_NO_AUTH`; startup rejects ambiguous auth mode configuration.
 
 ```bash
 CODEX_BRIDGE_ROOT="/Users/hongseok/Desktop/blitz-core" \
 CODEX_BRIDGE_NO_AUTH=1 \
 CODEX_BRIDGE_LOCAL_SMOKE_TEST=1 \
-CODEX_BRIDGE_TUNNEL_MODE=openai-secure \
 npm run start
 ```
 
@@ -99,12 +98,12 @@ Repository contents are treated as untrusted data. The bridge prepends instructi
 | `CODEX_BRIDGE_ROOT` | current directory | The single allowed repo root. Must be absolute for normal use. |
 | `CODEX_BRIDGE_HOST` | `127.0.0.1` | Bind host. Non-local binds are rejected because OAuth is not implemented. |
 | `CODEX_BRIDGE_PORT` | `8765` | HTTP port. |
-| `CODEX_BRIDGE_ALLOWED_HOSTS` | unset | Extra allowed Host headers for MCP DNS rebinding protection. |
+| `CODEX_BRIDGE_ALLOWED_HOSTS` | unset | Complete hostname allowlist for MCP DNS rebinding protection. Hostnames only; no scheme, port, path, query, or fragment. If set, include `127.0.0.1`/`localhost` for direct local clients as needed. |
 | `CODEX_BRIDGE_TOKEN` | unset | Bearer token for local direct tests. Send via `Authorization: Bearer ...`. |
 | `CODEX_BRIDGE_NO_AUTH` | unset | Enables no-auth mode only with local smoke-test guardrails. |
 | `CODEX_BRIDGE_LOCAL_SMOKE_TEST` | unset | Required acknowledgement for no-auth mode. |
 | `CODEX_BRIDGE_TUNNEL_MODE` | `none` | Use `openai-secure` for OpenAI Secure MCP Tunnel testing. |
-| `CODEX_BRIDGE_PUBLIC_BASE_URL` | unset | Optional public URL marker. Generic public no-auth is rejected. |
+| `CODEX_BRIDGE_PUBLIC_BASE_URL` | unset | Optional public URL marker for authenticated/OAuth-fronted deployments. Rejected in no-auth mode; not needed for Secure MCP Tunnel local testing. |
 | `CODEX_BRIDGE_CODEX` | `codex` | Codex command path. |
 | `CODEX_BRIDGE_UPSTREAM_TIMEOUT_MS` | `180000` | Max Codex MCP call timeout. |
 | `CODEX_BRIDGE_FAST_RETURN_MS` | `25000` | Return `jobId` after this many ms. |
@@ -154,6 +153,8 @@ http://127.0.0.1:8765/mcp
 
 Then register the tunnel HTTPS URL in ChatGPT.
 
+Keep the bridge bound to localhost and do not set `CODEX_BRIDGE_PUBLIC_BASE_URL` for Secure MCP Tunnel testing. The tunnel URL is registered in ChatGPT, not trusted by this bridge as proof that a public URL is safe.
+
 Sources:
 
 - [ChatGPT Developer mode](https://developers.openai.com/api/docs/guides/developer-mode)
@@ -167,6 +168,8 @@ This bridge does not implement OAuth 2.1.
 If you serve a ChatGPT-facing MCP endpoint directly on the public internet, put a ChatGPT-compatible OAuth 2.1 layer in front of it. OpenAI docs require protected resource metadata, authorization server metadata, authorization-code + PKCE, token verification, and correct resource/audience handling for authenticated MCP servers.
 
 Do not expose this bridge through a generic public ngrok or Cloudflare URL in no-auth mode.
+
+No-auth startup rejects `CODEX_BRIDGE_PUBLIC_BASE_URL` even when `CODEX_BRIDGE_TUNNEL_MODE=openai-secure`; the bridge cannot verify from an environment variable that a URL came from OpenAI Secure MCP Tunnel.
 
 Source:
 

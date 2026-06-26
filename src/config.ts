@@ -77,7 +77,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
   return {
     host,
     port,
-    allowedHosts: parseCsv(env.CODEX_BRIDGE_ALLOWED_HOSTS),
+    allowedHosts: parseAllowedHosts(env.CODEX_BRIDGE_ALLOWED_HOSTS),
     token,
     noAuth,
     localSmokeTest,
@@ -581,11 +581,19 @@ function validateExposurePolicy(input: {
   if (!LOCAL_HOSTS.has(input.host)) {
     throw new Error("This bridge must bind to 127.0.0.1/localhost because OAuth 2.1 public auth is not implemented.");
   }
+  if (input.noAuth && input.token) {
+    throw new Error("CODEX_BRIDGE_NO_AUTH and CODEX_BRIDGE_TOKEN are mutually exclusive.");
+  }
   if (!input.token && !input.noAuth) {
     throw new Error("Set CODEX_BRIDGE_TOKEN, or set CODEX_BRIDGE_NO_AUTH=1 with CODEX_BRIDGE_LOCAL_SMOKE_TEST=1.");
   }
   if (input.noAuth && !input.localSmokeTest) {
     throw new Error("CODEX_BRIDGE_NO_AUTH=1 requires CODEX_BRIDGE_LOCAL_SMOKE_TEST=1.");
+  }
+  if (input.noAuth && input.publicBaseUrl) {
+    throw new Error(
+      "CODEX_BRIDGE_PUBLIC_BASE_URL cannot be set in no-auth mode. Keep Secure MCP Tunnel configuration outside the bridge process."
+    );
   }
   if (input.publicBaseUrl && input.tunnelMode !== "openai-secure") {
     throw new Error("Public/generic tunnel exposure requires OAuth 2.1, which this bridge does not implement.");
@@ -630,6 +638,32 @@ function parseCsv(raw: string | undefined): string[] | undefined {
     .map((part) => part.trim())
     .filter(Boolean);
   return values && values.length > 0 ? Array.from(new Set(values)) : undefined;
+}
+
+function parseAllowedHosts(raw: string | undefined): string[] | undefined {
+  const values = parseCsv(raw);
+  if (!values) {
+    return undefined;
+  }
+  for (const value of values) {
+    validateAllowedHost(value);
+  }
+  return values;
+}
+
+function validateAllowedHost(value: string): void {
+  if (value.includes("://") || value.includes("/") || value.includes("?") || value.includes("#")) {
+    throw new Error("CODEX_BRIDGE_ALLOWED_HOSTS must contain hostnames only, without scheme, path, query, or fragment.");
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(`http://${value}`);
+  } catch {
+    throw new Error(`Invalid CODEX_BRIDGE_ALLOWED_HOSTS hostname: ${value}`);
+  }
+  if (parsed.hostname !== value || parsed.host !== value) {
+    throw new Error("CODEX_BRIDGE_ALLOWED_HOSTS must contain hostnames only, without ports or credentials.");
+  }
 }
 
 function parsePort(raw: string): number {
