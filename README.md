@@ -107,7 +107,7 @@ Removed and intentionally unsupported:
 - OpenAI API env names are stripped and not forwarded to child processes.
 - No prompts, bearer tokens, repo contents, or Codex outputs are persisted to logs.
 - Job outputs are in memory only and expire after `CODEX_BRIDGE_JOB_TTL_MS`.
-- Company mode (`CODEX_BRIDGE_COMPANY_MODE=1`) requires bearer auth, rejects no-auth/public URL markers, requires an absolute `CODEX_BRIDGE_CODEX`, isolates the Codex child environment, redacts the absolute root from `bridge_status` and the bridge policy prompt, and scans ordinary source/config file contents for known secret patterns before `codex_read`.
+- Company mode (`CODEX_BRIDGE_COMPANY_MODE=1`) requires bearer auth, rejects no-auth/public URL markers, requires an absolute `CODEX_BRIDGE_CODEX`, isolates the Codex child environment, redacts the absolute root from `bridge_status` and the bridge policy prompt, and scans ordinary source/config/docs/data file contents for known secret patterns before `codex_read`.
 - Company mode is not a substitute for OS/container isolation or a full company DLP pass. `CODEX_BRIDGE_ROOT_ISOLATION_ACK=1` is only valid when the bridge runs under a dedicated low-privilege user or container with only the sanitized checkout and isolated runtime directories visible. Run your approved secret scanner such as gitleaks or trufflehog before exposing important company projects.
 
 Repository contents are treated as untrusted data. The bridge prepends instructions telling Codex to ignore repo-contained attempts to alter bridge policy, auth policy, sandbox mode, allowed roots, or secret handling.
@@ -125,7 +125,7 @@ Repository contents are treated as untrusted data. The bridge prepends instructi
 | `CODEX_BRIDGE_LOCAL_SMOKE_TEST` | unset | Required acknowledgement for no-auth mode. |
 | `CODEX_BRIDGE_TUNNEL_MODE` | `none` | Use `openai-secure` for OpenAI Secure MCP Tunnel testing. |
 | `CODEX_BRIDGE_PUBLIC_BASE_URL` | unset | Optional public URL marker for authenticated/OAuth-fronted deployments. Rejected in no-auth mode; not needed for Secure MCP Tunnel local testing. |
-| `CODEX_BRIDGE_COMPANY_MODE` | unset | Enables stricter company-sensitive guardrails: bearer auth only, no public URL marker, redacted root disclosure, and source/config content secret scanning. |
+| `CODEX_BRIDGE_COMPANY_MODE` | unset | Enables stricter company-sensitive guardrails: bearer auth only, no public URL marker, redacted root disclosure, and source/config/docs/data content secret scanning. |
 | `CODEX_BRIDGE_ROOT_ISOLATION_ACK` | unset | Required with company mode after you have isolated the process with OS/container controls so only the sanitized target root is visible. |
 | `CODEX_BRIDGE_CODEX` | `codex` | Codex command path. Must be an absolute trusted path in company mode. |
 | `CODEX_BRIDGE_COMPANY_HOME` | unset | Required in company mode. Isolated `HOME` for the Codex child process. Must be an existing absolute directory. |
@@ -216,7 +216,7 @@ Source:
 - OAuth 2.1 is documented but not implemented.
 - The bridge cannot safely exclude individual secret files from a free-form Codex session, so it blocks roots containing sensitive-looking files.
 - The bridge process cannot prove an OS-enforced read boundary by itself. For company projects, use company mode only with external isolation controls, a sanitized checkout, and isolated child runtime directories.
-- Built-in content secret scanning is pattern-based and source/config focused. It is a guardrail, not a complete replacement for company-approved secret scanning and DLP.
+- Built-in content secret scanning is pattern-based and text-file focused. It is a guardrail, not a complete replacement for company-approved secret scanning and DLP.
 - Live `codex_read` depends on local Codex auth/session state.
 - `codex mcp-server` does not expose a direct effective-sandbox introspection API; this bridge verifies fixed startup args, strict config acceptance, tool-call payloads, and fixture write-block behavior.
 - The bridge is intentionally single-user and local-first.

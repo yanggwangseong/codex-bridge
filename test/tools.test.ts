@@ -216,6 +216,33 @@ describe("bridge tools", () => {
     await close();
   });
 
+  it("blocks documentation secrets before upstream delegation in company mode", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    const secret = "OPENAI_API_KEY=sk-1234567890abcdefghi";
+    writeFileSync(path.join(root, "README.md"), `${secret}\n`);
+    const { client, close } = await connect({
+      root,
+      upstream,
+      env: companyModeEnv()
+    });
+
+    const result = await client.callTool({
+      name: "codex_read",
+      arguments: {
+        prompt: "Summarize README."
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(realpathSync(root));
+    expect(upstream.calls).toHaveLength(0);
+
+    await close();
+  });
+
   it("blocks git internal sensitive files before upstream delegation", async () => {
     const upstream = new FakeUpstream();
     const root = tempRoot();

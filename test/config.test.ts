@@ -321,6 +321,29 @@ describe("config policy", () => {
     expect(() => assertRootSafeForDelegation(root, { scanFileContents: true })).toThrow(/safe per-file exclusion/);
   });
 
+  it("detects documentation and data-file secrets when content scanning is enabled", () => {
+    const root = tempRoot();
+    mkdirSync(path.join(root, "docs"));
+    const files = [
+      "README.md",
+      "docs/runbook.markdown",
+      "docs/guide.rst",
+      "docs/install.adoc",
+      "docs/notebook.ipynb",
+      "exports.csv",
+      "exports.tsv"
+    ].map((file) => path.join(root, file));
+    for (const file of files) {
+      writeFileSync(file, "OPENAI_API_KEY=sk-1234567890abcdefghi\n");
+    }
+
+    const scan = scanRootSafety(root, 30, { scanFileContents: true });
+    for (const file of files) {
+      expect(scan.sensitiveFiles).toContain(file);
+    }
+    expect(() => assertRootSafeForDelegation(root, { scanFileContents: true })).toThrow(/safe per-file exclusion/);
+  });
+
   it("detects sensitive files and symlink escapes inside generated dependency directories", () => {
     const root = tempRoot();
     const other = tempRoot();
