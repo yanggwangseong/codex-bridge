@@ -101,6 +101,21 @@ export function tempRoot(prefix = "codex-bridge-test-"): string {
   return mkdtempSync(path.join(tmpdir(), prefix));
 }
 
+export function companyModeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    CODEX_BRIDGE_NO_AUTH: undefined,
+    CODEX_BRIDGE_LOCAL_SMOKE_TEST: undefined,
+    CODEX_BRIDGE_TOKEN: "secret",
+    CODEX_BRIDGE_COMPANY_MODE: "1",
+    CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1",
+    CODEX_BRIDGE_CODEX: process.execPath,
+    CODEX_BRIDGE_COMPANY_HOME: tempRoot("codex-bridge-company-home-"),
+    CODEX_BRIDGE_COMPANY_CODEX_HOME: tempRoot("codex-bridge-company-codex-home-"),
+    CODEX_BRIDGE_COMPANY_TMPDIR: tempRoot("codex-bridge-company-tmp-"),
+    ...overrides
+  };
+}
+
 export function fakeToolResult(text: string): ToolResult {
   return {
     content: [

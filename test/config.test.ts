@@ -9,7 +9,7 @@ import {
   scanRootSafety
 } from "../src/config.js";
 import { buildChildEnv } from "../src/upstream.js";
-import { tempRoot } from "./helpers.js";
+import { companyModeEnv, tempRoot } from "./helpers.js";
 
 describe("config policy", () => {
   it("requires explicit local smoke acknowledgement for no-auth", () => {
@@ -106,15 +106,132 @@ describe("config policy", () => {
       })
     ).toThrow(/does not accept CODEX_BRIDGE_PUBLIC_BASE_URL/);
 
-    const config = loadConfig({
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_COMPANY_MODE: "1",
+        CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
+      })
+    ).toThrow(/CODEX_BRIDGE_CODEX.*absolute/);
+
+    expect(() =>
+      loadConfig({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_CODEX: process.execPath,
+        CODEX_BRIDGE_TOKEN: "secret",
+        CODEX_BRIDGE_COMPANY_MODE: "1",
+        CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
+      })
+    ).toThrow(/CODEX_BRIDGE_COMPANY_HOME/);
+
+    const env = companyModeEnv({
       CODEX_BRIDGE_ROOT: root,
-      CODEX_BRIDGE_TOKEN: "secret",
-      CODEX_BRIDGE_COMPANY_MODE: "1",
-      CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
+      CODEX_BRIDGE_COMPANY_CODEX_HOME: undefined,
+      CODEX_BRIDGE_COMPANY_TMPDIR: undefined
     });
+    const config = loadConfig(env);
     expect(config.companyMode).toBe(true);
     expect(config.noAuth).toBe(false);
     expect(config.allowedRoot).toBe(realpathSync(root));
+    expect(config.codexCommand).toBe(process.execPath);
+    expect(config.companyHome).toBe(realpathSync(env.CODEX_BRIDGE_COMPANY_HOME as string));
+    expect(config.companyCodexHome).toBe(config.companyHome);
+    expect(config.companyTmpDir).toBe(config.companyHome);
+
+    const splitEnv = companyModeEnv({
+      CODEX_BRIDGE_ROOT: root,
+      CODEX_BRIDGE_COMPANY_HOME: tempRoot("codex-bridge-company-home-"),
+      CODEX_BRIDGE_COMPANY_CODEX_HOME: tempRoot("codex-bridge-company-codex-home-"),
+      CODEX_BRIDGE_COMPANY_TMPDIR: tempRoot("codex-bridge-company-tmp-")
+    });
+    const splitConfig = loadConfig(splitEnv);
+    expect(splitConfig.companyHome).toBe(realpathSync(splitEnv.CODEX_BRIDGE_COMPANY_HOME as string));
+    expect(splitConfig.companyCodexHome).toBe(realpathSync(splitEnv.CODEX_BRIDGE_COMPANY_CODEX_HOME as string));
+    expect(splitConfig.companyTmpDir).toBe(realpathSync(splitEnv.CODEX_BRIDGE_COMPANY_TMPDIR as string));
+
+    const defaultPathConfig = loadConfig(
+      companyModeEnv({
+        CODEX_BRIDGE_ROOT: root,
+        PATH: "/Users/test/bin"
+      })
+    );
+    expect(defaultPathConfig.safePath).toBe("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+  });
+
+  it("builds an isolated child environment in company mode", () => {
+    const root = tempRoot();
+    const config = loadConfig(
+      companyModeEnv({
+        CODEX_BRIDGE_ROOT: root,
+        CODEX_BRIDGE_SAFE_PATH: "/usr/bin:/bin"
+      })
+    );
+    const childEnv = buildChildEnv(
+      {
+        PATH: "/host/bin",
+        HOME: "/Users/test",
+        CODEX_HOME: "/Users/test/.codex",
+        TMPDIR: "/var/folders/host",
+        SHELL: "/bin/zsh",
+        USER: "test",
+        LOGNAME: "test",
+        TERM: "xterm",
+        LC_ALL: "ko_KR.UTF-8",
+        OPENAI_API_KEY: "not-forwarded"
+      },
+      config
+    );
+
+    expect(childEnv).toEqual({
+      PATH: "/usr/bin:/bin",
+      HOME: config.companyHome,
+      CODEX_HOME: config.companyCodexHome,
+      TMPDIR: config.companyTmpDir,
+      LANG: "C.UTF-8"
+    });
+    expect(JSON.stringify(childEnv)).not.toContain("/Users/test");
+    expect(JSON.stringify(childEnv)).not.toContain("/var/folders/host");
+    expect(childEnv).not.toHaveProperty("SHELL");
+    expect(childEnv).not.toHaveProperty("USER");
+    expect(childEnv).not.toHaveProperty("LOGNAME");
+    expect(childEnv).not.toHaveProperty("TERM");
+    expect(childEnv).not.toHaveProperty("LC_ALL");
+    expect(childEnv).not.toHaveProperty("OPENAI_API_KEY");
+  });
+
+  it("rejects non-directory company child environment roots", () => {
+    const root = tempRoot();
+    const file = path.join(root, "home-file");
+    writeFileSync(file, "not a directory\n");
+
+    expect(() =>
+      loadConfig(
+        companyModeEnv({
+          CODEX_BRIDGE_ROOT: root,
+          CODEX_BRIDGE_COMPANY_HOME: file
+        })
+      )
+    ).toThrow(/CODEX_BRIDGE_COMPANY_HOME must be a directory/);
+
+    expect(() =>
+      loadConfig(
+        companyModeEnv({
+          CODEX_BRIDGE_ROOT: root,
+          CODEX_BRIDGE_COMPANY_HOME: "relative-home"
+        })
+      )
+    ).toThrow(/CODEX_BRIDGE_COMPANY_HOME must be absolute/);
+  });
+
+  it("preserves personal-mode child env behavior while stripping OpenAI API env names", () => {
+    const childEnv = buildChildEnv({
+      PATH: "/usr/bin",
+      HOME: "/Users/test",
+      OPENAI_API_KEY: "not-forwarded"
+    });
+    expect(childEnv).toMatchObject({ PATH: "/usr/bin", HOME: "/Users/test" });
+    expect(childEnv).not.toHaveProperty("OPENAI_API_KEY");
   });
 
   it("validates allowed host values as hostnames without schemes or ports", () => {

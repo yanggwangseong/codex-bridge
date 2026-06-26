@@ -99,7 +99,7 @@ export class CodexStdioUpstream implements CodexUpstream {
     const transport = new StdioClientTransport({
       command: this.config.codexCommand,
       args: buildCodexStartupArgs(this.config),
-      env: buildChildEnv(process.env),
+      env: buildChildEnv(process.env, this.config),
       cwd: this.config.allowedRoot,
       stderr: this.config.debugStderr ? "pipe" : "ignore"
     });
@@ -172,7 +172,20 @@ export function buildCodexReadPayload(input: {
   };
 }
 
-export function buildChildEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+export function buildChildEnv(env: NodeJS.ProcessEnv, config?: BridgeConfig): Record<string, string> {
+  if (config?.companyMode) {
+    if (!config.companyHome || !config.companyCodexHome || !config.companyTmpDir) {
+      throw new Error("Company mode child environment is missing isolated HOME/CODEX_HOME/TMPDIR directories.");
+    }
+    return {
+      PATH: config.safePath,
+      HOME: config.companyHome,
+      CODEX_HOME: config.companyCodexHome,
+      TMPDIR: config.companyTmpDir,
+      LANG: "C.UTF-8"
+    };
+  }
+
   const allowed = ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER", "TMPDIR", "LANG", "LC_ALL", "CODEX_HOME"];
   const child: Record<string, string> = {};
   for (const key of allowed) {

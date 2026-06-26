@@ -5,7 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { createBridgeMcpServer } from "../src/server.js";
-import { DeferredUpstream, FakeUpstream, fakeToolResult, parseToolJson, tempRoot } from "./helpers.js";
+import { DeferredUpstream, FakeUpstream, companyModeEnv, fakeToolResult, parseToolJson, tempRoot } from "./helpers.js";
 
 describe("bridge tools", () => {
   it("exposes only the reduced read-only tool surface", async () => {
@@ -59,13 +59,7 @@ describe("bridge tools", () => {
     const { client, close } = await connect({
       root,
       upstream,
-      env: {
-        CODEX_BRIDGE_NO_AUTH: undefined,
-        CODEX_BRIDGE_LOCAL_SMOKE_TEST: undefined,
-        CODEX_BRIDGE_TOKEN: "secret",
-        CODEX_BRIDGE_COMPANY_MODE: "1",
-        CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
-      }
+      env: companyModeEnv()
     });
     const status = parseToolJson(
       await client.callTool({
@@ -203,13 +197,7 @@ describe("bridge tools", () => {
     const { client, close } = await connect({
       root,
       upstream,
-      env: {
-        CODEX_BRIDGE_NO_AUTH: undefined,
-        CODEX_BRIDGE_LOCAL_SMOKE_TEST: undefined,
-        CODEX_BRIDGE_TOKEN: "secret",
-        CODEX_BRIDGE_COMPANY_MODE: "1",
-        CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
-      }
+      env: companyModeEnv()
     });
 
     const result = await client.callTool({

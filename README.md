@@ -50,13 +50,21 @@ CODEX_BRIDGE_TOKEN="$(openssl rand -hex 32)" \
 npm run start
 ```
 
-For company-sensitive repositories, run the bridge only from an already isolated OS/container account or mount where the sanitized target repo is the only visible working root. Company mode is fail-closed unless that external isolation is acknowledged, bearer auth is enabled, and no public bridge URL is configured:
+For company-sensitive repositories, run the bridge only from an already isolated OS/container account or mount where the sanitized target repo is the only visible working root. Do not use company mode from a normal developer account that can read unrelated projects or personal files.
+
+Company mode is fail-closed unless external isolation is acknowledged, bearer auth is enabled, no public bridge URL is configured, `codex` is referenced by an absolute trusted path, and the Codex child process gets isolated `HOME`/`CODEX_HOME`/`TMPDIR` directories:
 
 ```bash
+mkdir -p /sanitized/company/runtime-home /sanitized/company/runtime-tmp
+
 CODEX_BRIDGE_ROOT="/sanitized/company/repo" \
 CODEX_BRIDGE_TOKEN="$(openssl rand -hex 32)" \
 CODEX_BRIDGE_COMPANY_MODE=1 \
 CODEX_BRIDGE_ROOT_ISOLATION_ACK=1 \
+CODEX_BRIDGE_CODEX="$(command -v codex)" \
+CODEX_BRIDGE_COMPANY_HOME="/sanitized/company/runtime-home" \
+CODEX_BRIDGE_COMPANY_CODEX_HOME="/sanitized/company/runtime-home" \
+CODEX_BRIDGE_COMPANY_TMPDIR="/sanitized/company/runtime-tmp" \
 npm run start
 ```
 
@@ -93,13 +101,14 @@ Removed and intentionally unsupported:
 - Secret-looking files block `codex_read` when safe per-file exclusion cannot be guaranteed.
 - Blocked secret-looking names include `.env`, `.env.*`, `.npmrc`, `.pypirc`, `.netrc`, private SSH key names, `.pem`, `.key`, `.p12`, `.pfx`, and similar files.
 - Codex child starts with explicit read-only sandbox and `approval_policy=never`.
+- In company mode, the Codex child receives only an isolated minimal environment: `PATH`, `HOME`, `CODEX_HOME`, `TMPDIR`, and `LANG`.
 - Each `codex_read` call also forwards read-only sandbox and per-session config overrides.
 - Codex web search is disabled for bridge calls.
 - OpenAI API env names are stripped and not forwarded to child processes.
 - No prompts, bearer tokens, repo contents, or Codex outputs are persisted to logs.
 - Job outputs are in memory only and expire after `CODEX_BRIDGE_JOB_TTL_MS`.
-- Company mode (`CODEX_BRIDGE_COMPANY_MODE=1`) requires bearer auth, rejects no-auth/public URL markers, redacts the absolute root from `bridge_status` and the bridge policy prompt, and scans ordinary source/config file contents for known secret patterns before `codex_read`.
-- Company mode is not a substitute for OS/container isolation or a full company DLP pass. Use a dedicated low-privilege user or container with only the sanitized checkout mounted, and run your approved secret scanner such as gitleaks or trufflehog before exposing important company projects.
+- Company mode (`CODEX_BRIDGE_COMPANY_MODE=1`) requires bearer auth, rejects no-auth/public URL markers, requires an absolute `CODEX_BRIDGE_CODEX`, isolates the Codex child environment, redacts the absolute root from `bridge_status` and the bridge policy prompt, and scans ordinary source/config file contents for known secret patterns before `codex_read`.
+- Company mode is not a substitute for OS/container isolation or a full company DLP pass. `CODEX_BRIDGE_ROOT_ISOLATION_ACK=1` is only valid when the bridge runs under a dedicated low-privilege user or container with only the sanitized checkout and isolated runtime directories visible. Run your approved secret scanner such as gitleaks or trufflehog before exposing important company projects.
 
 Repository contents are treated as untrusted data. The bridge prepends instructions telling Codex to ignore repo-contained attempts to alter bridge policy, auth policy, sandbox mode, allowed roots, or secret handling.
 
@@ -118,7 +127,11 @@ Repository contents are treated as untrusted data. The bridge prepends instructi
 | `CODEX_BRIDGE_PUBLIC_BASE_URL` | unset | Optional public URL marker for authenticated/OAuth-fronted deployments. Rejected in no-auth mode; not needed for Secure MCP Tunnel local testing. |
 | `CODEX_BRIDGE_COMPANY_MODE` | unset | Enables stricter company-sensitive guardrails: bearer auth only, no public URL marker, redacted root disclosure, and source/config content secret scanning. |
 | `CODEX_BRIDGE_ROOT_ISOLATION_ACK` | unset | Required with company mode after you have isolated the process with OS/container controls so only the sanitized target root is visible. |
-| `CODEX_BRIDGE_CODEX` | `codex` | Codex command path. |
+| `CODEX_BRIDGE_CODEX` | `codex` | Codex command path. Must be an absolute trusted path in company mode. |
+| `CODEX_BRIDGE_COMPANY_HOME` | unset | Required in company mode. Isolated `HOME` for the Codex child process. Must be an existing absolute directory. |
+| `CODEX_BRIDGE_COMPANY_CODEX_HOME` | `CODEX_BRIDGE_COMPANY_HOME` | Optional isolated `CODEX_HOME` for the Codex child process. Must be an existing absolute directory. |
+| `CODEX_BRIDGE_COMPANY_TMPDIR` | `CODEX_BRIDGE_COMPANY_HOME` | Optional isolated `TMPDIR` for the Codex child process. Must be an existing absolute directory. |
+| `CODEX_BRIDGE_SAFE_PATH` | host `PATH`, or fixed system path in company mode | `PATH` passed to Codex child and Codex shell sessions. Set explicitly in company mode when your isolated runtime needs a narrower approved path. |
 | `CODEX_BRIDGE_UPSTREAM_TIMEOUT_MS` | `180000` | Max Codex MCP call timeout. |
 | `CODEX_BRIDGE_FAST_RETURN_MS` | `25000` | Return `jobId` after this many ms. |
 | `CODEX_BRIDGE_JOB_TTL_MS` | `600000` | Completed job output retention. |
@@ -202,7 +215,7 @@ Source:
 
 - OAuth 2.1 is documented but not implemented.
 - The bridge cannot safely exclude individual secret files from a free-form Codex session, so it blocks roots containing sensitive-looking files.
-- The bridge process cannot prove an OS-enforced read boundary by itself. For company projects, use company mode only with external isolation controls and a sanitized checkout.
+- The bridge process cannot prove an OS-enforced read boundary by itself. For company projects, use company mode only with external isolation controls, a sanitized checkout, and isolated child runtime directories.
 - Built-in content secret scanning is pattern-based and source/config focused. It is a guardrail, not a complete replacement for company-approved secret scanning and DLP.
 - Live `codex_read` depends on local Codex auth/session state.
 - `codex mcp-server` does not expose a direct effective-sandbox introspection API; this bridge verifies fixed startup args, strict config acceptance, tool-call payloads, and fixture write-block behavior.

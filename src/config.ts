@@ -16,6 +16,9 @@ export type BridgeConfig = {
   companyMode: boolean;
   rootIsolationAcknowledged: boolean;
   codexCommand: string;
+  companyHome?: string;
+  companyCodexHome?: string;
+  companyTmpDir?: string;
   allowedRoot: string;
   safePath: string;
   upstreamTimeoutMs: number;
@@ -51,6 +54,7 @@ export const OPENAI_API_ENV_NAMES = [
 ] as const;
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
+const DEFAULT_SAFE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 const GIT_METADATA_MAX_BYTES = 256 * 1024;
 const CONTENT_SCAN_MAX_BYTES = 1024 * 1024;
 const CONTENT_SCANNABLE_EXTENSIONS = new Set([
@@ -117,6 +121,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
   const companyMode = parseBool(env.CODEX_BRIDGE_COMPANY_MODE);
   const rootIsolationAcknowledged = parseBool(env.CODEX_BRIDGE_ROOT_ISOLATION_ACK);
   const allowOpenAiApiEnvForTest = parseBool(env.CODEX_BRIDGE_ALLOW_OPENAI_API_ENV_FOR_TEST);
+  const codexCommand = optional(env.CODEX_BRIDGE_CODEX) || "codex";
+  const companyHome = parseOptionalDirectory(optional(env.CODEX_BRIDGE_COMPANY_HOME), "CODEX_BRIDGE_COMPANY_HOME");
+  const companyCodexHome =
+    parseOptionalDirectory(optional(env.CODEX_BRIDGE_COMPANY_CODEX_HOME), "CODEX_BRIDGE_COMPANY_CODEX_HOME") ||
+    companyHome;
+  const companyTmpDir =
+    parseOptionalDirectory(optional(env.CODEX_BRIDGE_COMPANY_TMPDIR), "CODEX_BRIDGE_COMPANY_TMPDIR") || companyHome;
+  const safePath = optional(env.CODEX_BRIDGE_SAFE_PATH) || (companyMode ? DEFAULT_SAFE_PATH : defaultSafePath(env));
   const allowedRoot = parseAllowedRoot(optional(env.CODEX_BRIDGE_ROOT) || cwd);
 
   validateOpenAiApiEnv(env, allowOpenAiApiEnvForTest);
@@ -128,7 +140,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     tunnelMode,
     publicBaseUrl,
     companyMode,
-    rootIsolationAcknowledged
+    rootIsolationAcknowledged,
+    codexCommand,
+    companyHome,
+    companyCodexHome,
+    companyTmpDir
   });
 
   const upstreamTimeoutMs = parsePositiveInt(optional(env.CODEX_BRIDGE_UPSTREAM_TIMEOUT_MS) || "180000");
@@ -148,9 +164,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     publicBaseUrl,
     companyMode,
     rootIsolationAcknowledged,
-    codexCommand: optional(env.CODEX_BRIDGE_CODEX) || "codex",
+    codexCommand,
+    companyHome,
+    companyCodexHome,
+    companyTmpDir,
     allowedRoot,
-    safePath: optional(env.CODEX_BRIDGE_SAFE_PATH) || defaultSafePath(env),
+    safePath,
     upstreamTimeoutMs,
     fastReturnMs,
     jobTtlMs: parsePositiveInt(optional(env.CODEX_BRIDGE_JOB_TTL_MS) || "600000"),
@@ -692,6 +711,10 @@ function validateExposurePolicy(input: {
   publicBaseUrl?: string;
   companyMode: boolean;
   rootIsolationAcknowledged: boolean;
+  codexCommand: string;
+  companyHome?: string;
+  companyCodexHome?: string;
+  companyTmpDir?: string;
 }): void {
   if (!LOCAL_HOSTS.has(input.host)) {
     throw new Error("This bridge must bind to 127.0.0.1/localhost because OAuth 2.1 public auth is not implemented.");
@@ -714,6 +737,16 @@ function validateExposurePolicy(input: {
     if (input.publicBaseUrl) {
       throw new Error(
         "CODEX_BRIDGE_COMPANY_MODE=1 does not accept CODEX_BRIDGE_PUBLIC_BASE_URL. Keep the bridge localhost-only behind an externally controlled secure tunnel or OAuth layer."
+      );
+    }
+    if (!path.isAbsolute(input.codexCommand)) {
+      throw new Error(
+        "CODEX_BRIDGE_COMPANY_MODE=1 requires CODEX_BRIDGE_CODEX to be an absolute trusted Codex command path."
+      );
+    }
+    if (!input.companyHome || !input.companyCodexHome || !input.companyTmpDir) {
+      throw new Error(
+        "CODEX_BRIDGE_COMPANY_MODE=1 requires CODEX_BRIDGE_COMPANY_HOME so the Codex child process does not inherit host HOME/CODEX_HOME/TMPDIR."
       );
     }
   }
@@ -756,6 +789,20 @@ function parseAllowedRoot(raw: string): string {
     throw new Error(`CODEX_BRIDGE_ROOT must be a directory: ${root}`);
   }
   return root;
+}
+
+function parseOptionalDirectory(raw: string | undefined, name: string): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  if (!path.isAbsolute(raw)) {
+    throw new Error(`${name} must be absolute: ${raw}`);
+  }
+  const dir = realpathSync(raw);
+  if (!statSync(dir).isDirectory()) {
+    throw new Error(`${name} must be a directory: ${dir}`);
+  }
+  return dir;
 }
 
 function parseTunnelMode(raw: string): TunnelMode {
@@ -825,7 +872,7 @@ function optional(raw: string | undefined): string | undefined {
 }
 
 function defaultSafePath(env: NodeJS.ProcessEnv): string {
-  return optional(env.PATH) || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+  return optional(env.PATH) || DEFAULT_SAFE_PATH;
 }
 
 function escapeTomlString(value: string): string {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { buildCodexReadPayload, CodexStdioUpstream } from "../src/upstream.js";
-import { fakeToolResult, tempRoot } from "./helpers.js";
+import { companyModeEnv, fakeToolResult, tempRoot } from "./helpers.js";
 
 describe("codex stdio upstream", () => {
   it("rejects forbidden upstream tool names before calling the SDK client", async () => {
@@ -267,12 +267,7 @@ describe("codex stdio upstream", () => {
 
   it("does not echo the absolute root in company-mode policy prompts", () => {
     const root = tempRoot();
-    const config = loadConfig({
-      CODEX_BRIDGE_ROOT: root,
-      CODEX_BRIDGE_TOKEN: "secret",
-      CODEX_BRIDGE_COMPANY_MODE: "1",
-      CODEX_BRIDGE_ROOT_ISOLATION_ACK: "1"
-    });
+    const config = loadConfig(companyModeEnv({ CODEX_BRIDGE_ROOT: root }));
 
     const payload = buildCodexReadPayload({
       config,
