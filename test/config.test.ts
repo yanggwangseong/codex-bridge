@@ -99,6 +99,36 @@ describe("config policy", () => {
     expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
   });
 
+  it("detects sensitive files and symlink escapes inside generated dependency directories", () => {
+    const root = tempRoot();
+    const other = tempRoot();
+    mkdirSync(path.join(root, "node_modules", "package"), { recursive: true });
+    mkdirSync(path.join(root, "dist"), { recursive: true });
+    writeFileSync(path.join(other, "target.txt"), "outside\n");
+    symlinkSync(path.join(other, "target.txt"), path.join(root, "node_modules", "package", "outside-link"));
+    writeFileSync(path.join(root, "dist", ".env.local"), "TOKEN=secret\n");
+
+    const scan = scanRootSafety(root);
+    expect(scan.symlinkEscapes).toContain(path.join(root, "node_modules", "package", "outside-link"));
+    expect(scan.sensitiveFiles).toContain(path.join(root, "dist", ".env.local"));
+    expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
+  it("does not include external realpaths in cwd escape errors", () => {
+    const root = tempRoot();
+    const other = tempRoot();
+    writeFileSync(path.join(other, "target.txt"), "outside\n");
+    symlinkSync(path.join(other, "target.txt"), path.join(root, "outside-link"));
+    const config = loadConfig({
+      CODEX_BRIDGE_ROOT: root,
+      CODEX_BRIDGE_NO_AUTH: "1",
+      CODEX_BRIDGE_LOCAL_SMOKE_TEST: "1"
+    });
+
+    expect(() => resolveAllowedCwd(path.join(root, "outside-link"), config)).toThrow("cwd is outside CODEX_BRIDGE_ROOT.");
+    expect(() => resolveAllowedCwd(path.join(root, "outside-link"), config)).not.toThrow(realpathSync(other));
+  });
+
   it("detects credential-bearing git metadata without blocking normal git config", () => {
     const root = tempRoot();
     const gitDir = path.join(root, ".git");

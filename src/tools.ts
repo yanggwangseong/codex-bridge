@@ -99,8 +99,8 @@ export function registerBridgeTools(
       }
     },
     async (args, extra) => {
-      const cwd = resolveAllowedCwd(args.cwd, config);
       assertRootSafeForDelegation(config.allowedRoot);
+      const cwd = resolveAllowedCwd(args.cwd, config);
       return runCodexReadWithFastReturn({
         config,
         upstream,
@@ -183,10 +183,10 @@ async function runCodexReadWithFastReturn(input: {
     cwd: input.cwd
   });
   const job = input.jobs.start(() => input.upstream.callTool("codex", payload, input.timeoutMs, input.signal));
-  const state = await Promise.race([
-    job.promise.then(() => "settled" as const),
-    delay(input.config.fastReturnMs).then(() => "running" as const)
-  ]);
+  const fastReturn = delay(input.config.fastReturnMs);
+  const state = await Promise.race([job.promise.then(() => "settled" as const), fastReturn.promise]).finally(() => {
+    fastReturn.cancel();
+  });
 
   if (state === "running") {
     return jsonResult({
@@ -231,8 +231,24 @@ function jobsRunningExpiry(config: BridgeConfig): string {
   return new Date(Date.now() + config.upstreamTimeoutMs + config.jobTtlMs).toISOString();
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function delay(ms: number): { promise: Promise<"running">; cancel: () => void } {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<"running">((resolve) => {
+    timeout = setTimeout(() => {
+      timeout = undefined;
+      resolve("running");
+    }, ms);
+    timeout.unref?.();
+  });
+  return {
+    promise,
+    cancel: () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+    }
+  };
 }
 
 export function jsonResult(value: unknown): ToolResult {

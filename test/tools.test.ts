@@ -1,8 +1,8 @@
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { createBridgeMcpServer } from "../src/server.js";
 import { DeferredUpstream, FakeUpstream, fakeToolResult, parseToolJson, tempRoot } from "./helpers.js";
@@ -113,6 +113,30 @@ describe("bridge tools", () => {
     await close();
   });
 
+  it("blocks unsafe roots before resolving a symlinked cwd target", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    const other = tempRoot();
+    writeFileSync(path.join(other, "target.txt"), "outside\n");
+    symlinkSync(path.join(other, "target.txt"), path.join(root, "outside-link"));
+    const { client, close } = await connect({ root, upstream });
+
+    const result = await client.callTool({
+      name: "codex_read",
+      arguments: {
+        prompt: "Summarize files.",
+        cwd: path.join(root, "outside-link")
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+    expect(JSON.stringify(result)).not.toContain(realpathSync(other));
+    expect(upstream.calls).toHaveLength(0);
+
+    await close();
+  });
+
   it("blocks credential-bearing git metadata before upstream delegation", async () => {
     const upstream = new FakeUpstream();
     const root = tempRoot();
@@ -167,6 +191,32 @@ describe("bridge tools", () => {
     expect(JSON.stringify(completed.result)).toContain("done");
 
     await close();
+  });
+
+  it("clears the fast-return timer after immediate codex_read completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, close } = await connect({
+        env: {
+          CODEX_BRIDGE_FAST_RETURN_MS: "1000"
+        }
+      });
+
+      const completed = parseToolJson(
+        await client.callTool({
+          name: "codex_read",
+          arguments: {
+            prompt: "fast"
+          }
+        })
+      );
+
+      expect(completed.status).toBe("completed");
+      await close();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("redacts sensitive-looking output", async () => {

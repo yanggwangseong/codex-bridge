@@ -116,7 +116,7 @@ export function resolveAllowedCwd(input: string | undefined, config: BridgeConfi
   }
   const cwd = realpathSync(input);
   if (!isInsideRoot(cwd, config.allowedRoot)) {
-    throw new Error(`cwd is outside CODEX_BRIDGE_ROOT: ${cwd}`);
+    throw new Error("cwd is outside CODEX_BRIDGE_ROOT.");
   }
   return cwd;
 }
@@ -124,15 +124,6 @@ export function resolveAllowedCwd(input: string | undefined, config: BridgeConfi
 export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult {
   const sensitiveFiles: string[] = [];
   const symlinkEscapes: string[] = [];
-  const skipDirs = new Set([
-    ".git",
-    "node_modules",
-    "dist",
-    "coverage",
-    ".next",
-    ".turbo",
-    "upstream-reference"
-  ]);
 
   function addFinding(list: string[], value: string): void {
     if (list.length < maxFindings && !list.includes(value)) {
@@ -267,7 +258,7 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
         continue;
       }
 
-      if (stat.isDirectory() && !skipDirs.has(entry.name)) {
+      if (stat.isDirectory()) {
         walk(fullPath);
       }
     }

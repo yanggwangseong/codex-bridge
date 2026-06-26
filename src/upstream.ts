@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { BridgeConfig } from "./config.js";
 import { buildCodexSessionConfig, buildCodexStartupArgs, OPENAI_API_ENV_NAMES } from "./config.js";
@@ -47,9 +48,11 @@ export class CodexStdioUpstream implements CodexUpstream {
     if (name !== "codex") {
       throw new Error(`Bridge policy forbids calling upstream tool: ${name}`);
     }
-    const client = await this.getClient();
     const deadline = createDeadlineSignal(signal, timeoutMs);
     try {
+      const client = await this.getClient(deadline.requestOptions());
+      deadline.throwIfAborted();
+      const remainingTimeoutMs = deadline.remainingTimeoutMs();
       return (await client.callTool(
         {
           name,
@@ -57,8 +60,8 @@ export class CodexStdioUpstream implements CodexUpstream {
         },
         undefined,
         {
-          timeout: timeoutMs,
-          maxTotalTimeout: timeoutMs,
+          timeout: remainingTimeoutMs,
+          maxTotalTimeout: remainingTimeoutMs,
           resetTimeoutOnProgress: true,
           signal: deadline.signal
         }
@@ -76,18 +79,23 @@ export class CodexStdioUpstream implements CodexUpstream {
     this.connecting = undefined;
   }
 
-  private async getClient(): Promise<Client> {
+  private async getClient(options?: RequestOptions): Promise<Client> {
     if (this.client) {
       return this.client;
     }
     if (!this.connecting) {
-      this.connecting = this.connect();
+      this.connecting = this.connect(options).catch((error: unknown) => {
+        this.client = undefined;
+        this.transport = undefined;
+        this.connecting = undefined;
+        throw error;
+      });
     }
-    this.client = await this.connecting;
+    this.client = options?.signal ? await abortable(this.connecting, options.signal) : await this.connecting;
     return this.client;
   }
 
-  private async connect(): Promise<Client> {
+  private async connect(options?: RequestOptions): Promise<Client> {
     const transport = new StdioClientTransport({
       command: this.config.codexCommand,
       args: buildCodexStartupArgs(this.config),
@@ -111,10 +119,43 @@ export class CodexStdioUpstream implements CodexUpstream {
         capabilities: {}
       }
     );
-    await client.connect(transport);
-    this.transport = transport;
-    return client;
+    const closeOnAbort = () => {
+      void transport.close();
+      void client.close();
+    };
+    options?.signal?.addEventListener("abort", closeOnAbort, { once: true });
+    try {
+      options?.signal?.throwIfAborted();
+      await client.connect(transport, options);
+      this.transport = transport;
+      return client;
+    } catch (error) {
+      await transport.close();
+      throw error;
+    } finally {
+      options?.signal?.removeEventListener("abort", closeOnAbort);
+    }
   }
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(toError(signal.reason));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
+}
+
+function toError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return new Error(reason === undefined ? "Operation aborted." : String(reason));
 }
 
 export function buildCodexReadPayload(input: {
@@ -148,16 +189,21 @@ export function buildChildEnv(env: NodeJS.ProcessEnv): Record<string, string> {
 
 function createDeadlineSignal(parentSignal: AbortSignal | undefined, timeoutMs: number): {
   signal: AbortSignal;
+  remainingTimeoutMs: () => number;
+  requestOptions: () => RequestOptions;
+  throwIfAborted: () => void;
   cleanup: () => void;
 } {
   const controller = new AbortController();
+  const deadlineAt = Date.now() + timeoutMs;
+  const timeoutError = () => new Error(`Codex upstream call exceeded ${timeoutMs}ms total timeout.`);
   const abort = (reason: unknown) => {
     if (!controller.signal.aborted) {
       controller.abort(reason);
     }
   };
   const timeout = setTimeout(() => {
-    abort(new Error(`Codex upstream call exceeded ${timeoutMs}ms total timeout.`));
+    abort(timeoutError());
   }, timeoutMs);
   timeout.unref?.();
 
@@ -172,6 +218,21 @@ function createDeadlineSignal(parentSignal: AbortSignal | undefined, timeoutMs: 
 
   return {
     signal: controller.signal,
+    remainingTimeoutMs: () => Math.max(1, deadlineAt - Date.now()),
+    requestOptions: () => {
+      const remaining = Math.max(1, deadlineAt - Date.now());
+      return {
+        timeout: remaining,
+        maxTotalTimeout: remaining,
+        signal: controller.signal
+      };
+    },
+    throwIfAborted: () => {
+      if (!controller.signal.aborted && Date.now() >= deadlineAt) {
+        abort(timeoutError());
+      }
+      controller.signal.throwIfAborted();
+    },
     cleanup: () => {
       clearTimeout(timeout);
       parentSignal?.removeEventListener("abort", onParentAbort);
