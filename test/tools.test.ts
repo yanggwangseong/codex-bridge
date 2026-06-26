@@ -162,6 +162,32 @@ describe("bridge tools", () => {
     await close();
   });
 
+  it("blocks external gitdir metadata before upstream delegation without leaking external paths", async () => {
+    const upstream = new FakeUpstream();
+    const root = tempRoot();
+    const other = tempRoot();
+    const externalGitDir = path.join(other, "actual.git");
+    mkdirSync(externalGitDir);
+    writeFileSync(path.join(externalGitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+    writeFileSync(path.join(root, ".git"), `gitdir: ${externalGitDir}\n`);
+    const { client, close } = await connect({ root, upstream });
+
+    const result = await client.callTool({
+      name: "codex_read",
+      arguments: {
+        prompt: "Summarize files."
+      }
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("safe per-file exclusion");
+    expect(JSON.stringify(result)).not.toContain(realpathSync(other));
+    expect(JSON.stringify(result)).not.toContain("actual.git");
+    expect(upstream.calls).toHaveLength(0);
+
+    await close();
+  });
+
   it("fast-returns and later reports completed jobs", async () => {
     const upstream = new DeferredUpstream();
     const { client, close } = await connect({

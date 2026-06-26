@@ -124,6 +124,7 @@ export function resolveAllowedCwd(input: string | undefined, config: BridgeConfi
 export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult {
   const sensitiveFiles: string[] = [];
   const symlinkEscapes: string[] = [];
+  const inspectedGitMetadataFiles = new Set<string>();
 
   function addFinding(list: string[], value: string): void {
     if (list.length < maxFindings && !list.includes(value)) {
@@ -131,7 +132,12 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     }
   }
 
-  function inspectGitMetadataFile(fullPath: string): void {
+  function inspectGitMetadataFile(fullPath: string, depth = 0, findingPath = fullPath): void {
+    if (depth > 8) {
+      addFinding(sensitiveFiles, findingPath);
+      return;
+    }
+
     let stat;
     try {
       stat = lstatSync(fullPath);
@@ -143,20 +149,30 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
       try {
         const target = realpathSync(fullPath);
         if (!isInsideRoot(target, root)) {
-          addFinding(symlinkEscapes, fullPath);
+          addFinding(symlinkEscapes, findingPath);
           return;
         }
-        inspectGitMetadataContent(target, fullPath);
+        const targetStat = statSync(target);
+        if (path.basename(findingPath) === ".git") {
+          inspectGitDirFile(target, findingPath, targetStat, depth + 1);
+        } else {
+          inspectGitMetadataContent(target, findingPath, targetStat, depth + 1);
+        }
       } catch {
-        addFinding(symlinkEscapes, fullPath);
+        addFinding(symlinkEscapes, findingPath);
       }
       return;
     }
 
-    inspectGitMetadataContent(fullPath, fullPath, stat);
+    if (path.basename(findingPath) === ".git") {
+      inspectGitDirFile(fullPath, findingPath, stat, depth);
+      return;
+    }
+
+    inspectGitMetadataContent(fullPath, findingPath, stat, depth);
   }
 
-  function inspectGitMetadataContent(readPath: string, findingPath: string, stat = statSync(readPath)): void {
+  function inspectGitDirFile(readPath: string, findingPath: string, stat = statSync(readPath), depth = 0): void {
     if (!stat.isFile()) {
       return;
     }
@@ -166,38 +182,107 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     }
 
     try {
-      if (containsSecretPattern(readFileSync(readPath, "utf8"))) {
+      const content = readFileSync(readPath, "utf8");
+      const gitDir = parseGitDirFile(content);
+      if (!gitDir) {
+        return;
+      }
+      const gitDirPath = resolveGitMetadataReference(gitDir, path.dirname(readPath));
+      if (!gitDirPath) {
+        addFinding(symlinkEscapes, findingPath);
+        return;
+      }
+
+      const gitDirRealPath = realpathSync(gitDirPath);
+      if (!isInsideRoot(gitDirRealPath, root)) {
+        addFinding(symlinkEscapes, findingPath);
+        return;
+      }
+      scanGitMetadataPath(gitDirRealPath, depth + 1);
+    } catch {
+      addFinding(symlinkEscapes, findingPath);
+    }
+  }
+
+  function inspectGitMetadataContent(readPath: string, findingPath: string, stat = statSync(readPath), depth = 0): void {
+    if (depth > 8) {
+      addFinding(sensitiveFiles, findingPath);
+      return;
+    }
+    if (!stat.isFile()) {
+      return;
+    }
+    if (stat.size > GIT_METADATA_MAX_BYTES) {
+      addFinding(sensitiveFiles, findingPath);
+      return;
+    }
+
+    let inspectedKey = readPath;
+    try {
+      inspectedKey = realpathSync(readPath);
+    } catch {
+      return;
+    }
+    if (inspectedGitMetadataFiles.has(inspectedKey)) {
+      return;
+    }
+    inspectedGitMetadataFiles.add(inspectedKey);
+
+    try {
+      const content = readFileSync(readPath, "utf8");
+      if (containsSecretPattern(content)) {
         addFinding(sensitiveFiles, findingPath);
       }
+      inspectGitConfigIncludes(readPath, findingPath, content, depth + 1);
     } catch {
       return;
     }
   }
 
-  function scanGitMetadataDir(dir: string, depth: number): void {
+  function scanGitMetadataPath(metadataPath: string, depth: number): void {
     if (depth > 8) {
+      addFinding(sensitiveFiles, metadataPath);
       return;
     }
 
     let stat;
     try {
-      stat = lstatSync(dir);
+      stat = lstatSync(metadataPath);
     } catch {
       return;
     }
 
     if (stat.isSymbolicLink()) {
       try {
-        const target = realpathSync(dir);
+        const target = realpathSync(metadataPath);
         if (!isInsideRoot(target, root)) {
-          addFinding(symlinkEscapes, dir);
+          addFinding(symlinkEscapes, metadataPath);
+          return;
         }
+        scanGitMetadataPath(target, depth + 1);
       } catch {
-        addFinding(symlinkEscapes, dir);
+        addFinding(symlinkEscapes, metadataPath);
+      }
+      return;
+    }
+    if (stat.isFile()) {
+      if (path.basename(metadataPath) === ".git") {
+        inspectGitDirFile(metadataPath, metadataPath, stat, depth);
+      } else {
+        inspectGitMetadataContent(metadataPath, metadataPath, stat, depth);
       }
       return;
     }
     if (!stat.isDirectory()) {
+      return;
+    }
+
+    scanGitMetadataDir(metadataPath, depth);
+  }
+
+  function scanGitMetadataDir(dir: string, depth: number): void {
+    if (depth > 8) {
+      addFinding(sensitiveFiles, dir);
       return;
     }
 
@@ -219,6 +304,45 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
         inspectGitMetadataFile(fullPath);
       }
     }
+  }
+
+  function inspectGitConfigIncludes(readPath: string, findingPath: string, content: string, depth: number): void {
+    for (const includePath of parseGitConfigIncludePaths(content)) {
+      const candidate = resolveGitMetadataReference(includePath, path.dirname(readPath));
+      if (!candidate) {
+        addFinding(symlinkEscapes, findingPath);
+        continue;
+      }
+
+      let targetPath: string;
+      try {
+        targetPath = realpathSync(candidate);
+      } catch {
+        if (!isInsideRoot(path.resolve(candidate), root)) {
+          addFinding(symlinkEscapes, findingPath);
+        }
+        continue;
+      }
+
+      if (!isInsideRoot(targetPath, root)) {
+        addFinding(symlinkEscapes, findingPath);
+        continue;
+      }
+      inspectGitMetadataFile(targetPath, depth);
+    }
+  }
+
+  function resolveGitMetadataReference(value: string, baseDir: string): string | undefined {
+    if (value === "~") {
+      return root;
+    }
+    if (value.startsWith("~/")) {
+      return path.join(root, value.slice(2));
+    }
+    if (value.startsWith("~")) {
+      return undefined;
+    }
+    return path.isAbsolute(value) ? value : path.resolve(baseDir, value);
   }
 
   function walk(dir: string): void {
@@ -268,7 +392,7 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     inspectGitMetadataFile(path.join(root, ".gitmodules"));
     inspectGitMetadataFile(path.join(root, ".git-credentials"));
     inspectGitMetadataFile(path.join(root, ".gitconfig"));
-    scanGitMetadataDir(path.join(root, ".git"), 0);
+    scanGitMetadataPath(path.join(root, ".git"), 0);
     walk(root);
   }
 
@@ -276,6 +400,55 @@ export function scanRootSafety(root: string, maxFindings = 30): SafetyScanResult
     sensitiveFiles: sensitiveFiles.sort(),
     symlinkEscapes: symlinkEscapes.sort()
   };
+}
+
+function parseGitDirFile(content: string): string | undefined {
+  const match = content.match(/^\s*gitdir\s*:\s*(.+?)\s*$/im);
+  return match?.[1]?.trim();
+}
+
+function parseGitConfigIncludePaths(content: string): string[] {
+  const paths: string[] = [];
+  let section = "";
+
+  for (const rawLine of content.split(/\r?\n/)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) {
+      continue;
+    }
+
+    const sectionMatch = trimmed.match(/^\[\s*([A-Za-z0-9.-]+)/);
+    if (sectionMatch) {
+      section = sectionMatch[1].toLowerCase();
+      continue;
+    }
+
+    if (section !== "include" && section !== "includeif") {
+      continue;
+    }
+
+    const pathMatch = trimmed.match(/^path\s*=\s*(.+)$/i);
+    const includePath = pathMatch?.[1] ? unquoteGitConfigValue(pathMatch[1]) : undefined;
+    if (includePath) {
+      paths.push(includePath);
+    }
+  }
+
+  return paths;
+}
+
+function unquoteGitConfigValue(raw: string): string {
+  const value = raw.trim().replace(/\s+[;#].*$/, "");
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value
+      .slice(1, -1)
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .trim();
+  }
+  return value.trim();
 }
 
 export function assertRootSafeForDelegation(root: string): void {

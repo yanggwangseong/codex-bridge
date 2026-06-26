@@ -194,6 +194,54 @@ describe("config policy", () => {
     expect(scanRootSafety(root).symlinkEscapes).toContain(path.join(gitDir, "config"));
   });
 
+  it("detects root gitdir files that point outside the root", () => {
+    const root = realpathSync(tempRoot());
+    const other = realpathSync(tempRoot());
+    const externalGitDir = path.join(other, "actual.git");
+    mkdirSync(externalGitDir);
+    writeFileSync(path.join(externalGitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+    writeFileSync(path.join(root, ".git"), `gitdir: ${externalGitDir}\n`);
+
+    const scan = scanRootSafety(root);
+    expect(scan.symlinkEscapes).toContain(path.join(root, ".git"));
+    expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
+  it("scans root gitdir files that point inside the root", () => {
+    const root = realpathSync(tempRoot());
+    const gitDir = path.join(root, "actual.git");
+    mkdirSync(gitDir);
+    writeFileSync(path.join(root, ".git"), "gitdir: actual.git\n");
+    writeFileSync(path.join(gitDir, "config"), "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+
+    expect(scanRootSafety(root).sensitiveFiles).toContain(path.join(gitDir, "config"));
+  });
+
+  it("detects git config includes that point outside the root", () => {
+    const root = realpathSync(tempRoot());
+    const other = realpathSync(tempRoot());
+    const gitDir = path.join(root, ".git");
+    const includedConfig = path.join(other, "external-gitconfig");
+    mkdirSync(gitDir);
+    writeFileSync(path.join(gitDir, "config"), `[include]\n\tpath = ${includedConfig}\n`);
+    writeFileSync(includedConfig, "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+
+    const scan = scanRootSafety(root);
+    expect(scan.symlinkEscapes).toContain(path.join(gitDir, "config"));
+    expect(() => assertRootSafeForDelegation(root)).toThrow(/safe per-file exclusion/);
+  });
+
+  it("scans git config includes that stay inside the root", () => {
+    const root = realpathSync(tempRoot());
+    const gitDir = path.join(root, ".git");
+    const includedConfig = path.join(root, "included-gitconfig");
+    mkdirSync(gitDir);
+    writeFileSync(path.join(gitDir, "config"), "[includeIf \"gitdir:./\"]\n\tpath = ../included-gitconfig\n");
+    writeFileSync(includedConfig, "[http]\nextraheader = AUTHORIZATION: basic abcdefghijklmnop\n");
+
+    expect(scanRootSafety(root).sensitiveFiles).toContain(includedConfig);
+  });
+
   it("builds explicit read-only Codex startup args and sanitized child env", () => {
     const root = tempRoot();
     const config = loadConfig({
