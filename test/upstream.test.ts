@@ -4,6 +4,18 @@ import { CodexStdioUpstream } from "../src/upstream.js";
 import { fakeToolResult, tempRoot } from "./helpers.js";
 
 describe("codex stdio upstream", () => {
+  it("rejects forbidden upstream tool names before calling the SDK client", async () => {
+    const client = {
+      callTool: vi.fn()
+    };
+    const upstream = createUpstreamWithClient(client);
+
+    await expect(upstream.callTool("not-codex", { prompt: "read" }, 100)).rejects.toThrow(
+      "Bridge policy forbids calling upstream tool: not-codex"
+    );
+    expect(client.callTool).not.toHaveBeenCalled();
+  });
+
   it("passes cancellation and timeout options to the SDK client", async () => {
     const controller = new AbortController();
     let capturedOptions: Record<string, unknown> | undefined;
@@ -36,16 +48,54 @@ describe("codex stdio upstream", () => {
 
   it("propagates parent aborts into the SDK call signal", async () => {
     const controller = new AbortController();
+    let capturedSignal: AbortSignal | undefined;
+    let enteredCallTool: () => void = () => {};
+    const callToolEntered = new Promise<void>((resolve) => {
+      enteredCallTool = resolve;
+    });
     const client = {
-      callTool: vi.fn((_params, _schema, options) => waitForAbort(options.signal))
+      callTool: vi.fn((_params, _schema, options) => {
+        capturedSignal = options.signal;
+        enteredCallTool();
+        return waitForAbort(options.signal);
+      })
     };
     const upstream = createUpstreamWithClient(client);
 
     const result = upstream.callTool("codex", { prompt: "read" }, 1000, controller.signal);
-    const rejection = expect(result).rejects.toThrow("client disconnected");
+    await callToolEntered;
+    expect(capturedSignal?.aborted).toBe(false);
+
     controller.abort(new Error("client disconnected"));
 
-    await rejection;
+    await expect(result).rejects.toThrow("client disconnected");
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it("cleans up deadline timers and parent abort listeners after successful SDK responses", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      let capturedSignal: AbortSignal | undefined;
+      const client = {
+        callTool: vi.fn(async (_params, _schema, options) => {
+          capturedSignal = options.signal;
+          return fakeToolResult("ok");
+        })
+      };
+      const upstream = createUpstreamWithClient(client);
+
+      await upstream.callTool("codex", { prompt: "read" }, 100, controller.signal);
+      expect(capturedSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(capturedSignal?.aborted).toBe(false);
+
+      controller.abort(new Error("client disconnected"));
+      expect(capturedSignal?.aborted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("enforces an absolute upstream deadline independent of SDK progress resets", async () => {

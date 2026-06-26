@@ -135,13 +135,16 @@ describe("http server", () => {
     request.write(body);
     request.end();
 
-    await waitForCondition(() => upstream.calls.length === 1);
+    await waitForCondition(() => upstream.calls.length === 1, "first upstream call");
     const closed = new Promise<void>((resolve) => {
       request.once("close", resolve);
     });
     request.destroy();
     await closed;
-    await waitForCondition(() => upstream.abortedCalls === 1 && upstream.pendingCount === 0);
+    await waitForCondition(
+      () => upstream.abortedCalls === 1 && upstream.pendingCount === 0,
+      "aborted call cleanup"
+    );
 
     const invalidResponse = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
@@ -172,7 +175,7 @@ describe("http server", () => {
         }
       })
     });
-    await waitForCondition(() => upstream.calls.length === 2);
+    await waitForCondition(() => upstream.calls.length === 2, "second upstream call");
     upstream.resolveNext();
     const nextResponse = await nextRead;
     const nextBody = await nextResponse.text();
