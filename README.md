@@ -237,6 +237,46 @@ codex_read로 현재 변경 결과물을 read-only 리뷰해줘.
 
 운영 편의를 위해 로컬에서는 `cb up`, `cb restart`, `cb status`, `cb logs` 같은 alias나 wrapper를 둘 수 있습니다. 단, API key, tunnel runtime key, bearer token은 저장소에 커밋하지 말고 macOS Keychain, 1Password, 회사 secret manager, 일회성 환경변수 중 하나로 관리하세요.
 
+## 로컬 alias 등록
+
+이 저장소 자체는 특정 사용자의 tunnel wrapper를 강제하지 않습니다. 다만 로컬 ignored runtime에 `.gstack/runtime/tunnel-client/tunnelctl.sh` 같은 wrapper를 두었다면, `~/.zshrc`에 다음 alias를 등록해서 매번 긴 경로를 입력하지 않을 수 있습니다.
+
+```bash
+alias cb='cd /path/to/codex-bridge && .gstack/runtime/tunnel-client/tunnelctl.sh'
+```
+
+등록 후 현재 터미널에 반영합니다.
+
+```bash
+source ~/.zshrc
+```
+
+이후에는 다음처럼 사용합니다.
+
+| 명령 | 용도 |
+| --- | --- |
+| `cb set-key` | tunnel runtime API key를 macOS Keychain 같은 로컬 secret store에 저장 |
+| `cb up` | sanitized mirror 갱신, tunnel 시작, 상태 확인을 한 번에 수행 |
+| `cb restart` | key, Codex 로그인, bridge 설정 변경 후 tunnel/bridge 재시작 |
+| `cb status` | healthz, readyz, process, control-plane 상태 확인 |
+| `cb logs` | tunnel-client와 bridge 로그 확인 |
+| `cb stop` | tunnel-client 중지 |
+| `cb open-ui` | tunnel-client 로컬 UI 열기 |
+
+alias가 로드되지 않는 non-interactive shell에서는 전체 경로로 직접 실행하면 됩니다.
+
+```bash
+/path/to/codex-bridge/.gstack/runtime/tunnel-client/tunnelctl.sh status
+```
+
+개인 로컬 예시:
+
+```bash
+alias cb='cd /Users/your-name/project/codex-bridge && .gstack/runtime/tunnel-client/tunnelctl.sh'
+```
+
+이 alias와 `.gstack/` 런타임 파일은 로컬 운영 편의용입니다. 저장소에 민감값을 커밋하지 않도록 `.gstack/`, token 파일, auth 파일, 로그 파일은 ignored 상태로 유지하세요.
+
 ## 인증 개념 정리
 
 이 프로젝트를 운영할 때 인증은 세 종류가 섞여 보일 수 있습니다.
